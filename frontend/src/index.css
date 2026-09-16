@@ -1,0 +1,127 @@
+@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ground: #f7f8f7;
+  --surface: #ffffff;
+  --surface-2: #f1f4f2;
+  --ink: #14201c;
+  --ink-2: #4c5a55;
+  --ink-3: #77857f;
+  --line: #dee4e1;
+  --line-strong: #c4cec9;
+  --accent: #0f6b5c;
+  --accent-soft: #e2efea;
+  --band-1: #0f6b5c;
+  --band-2: #6e8a2c;
+  --band-3: #b5761b;
+  --band-4: #a33b22;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0d1412;
+    --surface: #141d1a;
+    --surface-2: #1a2521;
+    --ink: #e7edea;
+    --ink-2: #a3b1ab;
+    --ink-3: #7a8a84;
+    --line: #26312d;
+    --line-strong: #33403a;
+    --accent: #4fb89f;
+    --accent-soft: #16302a;
+    --band-1: #4fb89f;
+    --band-2: #9dbb4e;
+    --band-3: #d9993f;
+    --band-4: #d96a4c;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #0d1412;
+  --surface: #141d1a;
+  --surface-2: #1a2521;
+  --ink: #e7edea;
+  --ink-2: #a3b1ab;
+  --ink-3: #7a8a84;
+  --line: #26312d;
+  --line-strong: #33403a;
+  --accent: #4fb89f;
+  --accent-soft: #16302a;
+  --band-1: #4fb89f;
+  --band-2: #9dbb4e;
+  --band-3: #d9993f;
+  --band-4: #d96a4c;
+}
+
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  button,
+  label,
+  th,
+  input,
+  select,
+  textarea {
+    font-family: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  }
+  *:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  .eyebrow {
+    @apply font-display text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-ink3;
+  }
+  .card {
+    @apply rounded-md border border-line bg-surface;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold
+           transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:opacity-90;
+  }
+  .btn-ghost {
+    @apply btn border border-line bg-surface text-ink hover:bg-surface2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* The accent is dark in light mode and light in dark mode, so button text has
+   to flip with it or it disappears into the fill. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .btn-primary {
+    color: #0d1412;
+  }
+}
+:root[data-theme="dark"] .btn-primary {
+  color: #0d1412;
+}

@@ -1,0 +1,10 @@
+Polymorphism means one interface can take many forms.
+In object oriented programming a reference of a base class
+can point to objects of different derived classes.
+There are two types: compile time polymorphism which is
+achieved using method overloading, and run time
+polymorphism which is achieved using method overriding.
+For example a Shape class declares a draw() method and
+Circle and Square override it with their own version.
+The correct method is chosen based on the actual object.
+This makes the program easier to extend and maintain.

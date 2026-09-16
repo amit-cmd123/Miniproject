@@ -1,0 +1,43 @@
+# EvalNova Core - backend dependencies
+# Install with:
+#   python -m venv .venv
+#   .venv\Scripts\activate
+#   pip install -r requirements.txt
+#
+# torch is CPU-only here. For a CUDA machine or a Colab notebook, install
+# torch from the appropriate index first, then this file.
+
+# --- API layer ---
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-multipart==0.0.32
+python-dotenv==1.2.3
+
+# --- persistence ---
+SQLAlchemy==2.0.52
+# psycopg[binary]==3.2.3     # uncomment when moving from SQLite to PostgreSQL
+
+# --- image processing (Part 1) ---
+opencv-python-headless==5.0.0.93
+pillow==12.3.0
+numpy==2.2.6
+
+# --- handwriting recognition (Part 1) ---
+# transformers is pinned below 5.0 deliberately: the 5.x line removed the
+# slow-to-fast tokenizer conversion that the TrOCR checkpoints rely on, and
+# loading microsoft/trocr-base-handwritten fails there.
+torch==2.14.0
+torchvision==0.29.0
+transformers==4.57.6
+sentencepiece==0.2.2
+protobuf==7.36.1
+
+# --- PDF answer booklets (Part 1) ---
+# Rasterises scanned answer sheets to page images. Imported as `pymupdf`;
+# the older `fitz` name still works but warns on every import.
+PyMuPDF==1.28.2
+
+# --- measurement ---
+jiwer==4.0.0        # character and word error rate
