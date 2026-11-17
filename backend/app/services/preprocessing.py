@@ -186,26 +186,46 @@ def _remove_specks(mask: np.ndarray, min_area: int = 12) -> np.ndarray:
     return keep[labels].astype(np.uint8) * 255
 
 
-def _looks_like_rule(mask: np.ndarray, segment: tuple[int, int, int, int]) -> bool:
-    """Is this straight run of ink a printed rule, or a row of writing?
+def _looks_like_rule(
+    mask: np.ndarray,
+    segment: tuple[int, int, int, int],
+    labels: np.ndarray,
+    heights: np.ndarray,
+) -> bool:
+    """Is this straight run of ink a printed rule, or a line of writing?
 
-    Neat writing lines its letters up on a baseline, and the Hough transform
-    happily reports that as a line. The difference is what lies beside it: a
-    rule is dense along its own path with bare paper on either side, while a
-    baseline has letter bodies right next to it.
+    Density is the wrong question. A fine pen covers very few pixels, so ink
+    density is low everywhere and a line of neat writing looks as empty as bare
+    paper beside it - which is how 152 text baselines once passed as rules.
+
+    The reliable difference is structural: *what is this line made of?* A rule is
+    built from pieces a few pixels tall. A baseline runs through letters, which
+    are twenty or thirty pixels tall. So the test looks at the connected
+    components the line passes through and asks how tall they are.
     """
     x1, y1, x2, y2 = segment
+    horizontal = abs(x2 - x1) >= abs(y2 - y1)
+
+    # A photographed rule arrives broken into dashes, so bridge the gaps along
+    # the line's own direction before asking how continuous it is.
+    span = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 1) if horizontal else (1, 31))
+    bridged = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, span)
+
     on_path = np.zeros_like(mask)
     cv2.line(on_path, (x1, y1), (x2, y2), 255, 3)
-    # "Beside" starts ~10px out, so the twin of a double margin rule counts as
-    # part of the rule, and ends ~22px out, where letter bodies would sit.
-    near = np.zeros_like(mask)
-    cv2.line(near, (x1, y1), (x2, y2), 255, 45)
-    beside = cv2.bitwise_and(near, cv2.bitwise_not(cv2.dilate(on_path, np.ones((19, 19), np.uint8))))
+    if float((bridged[on_path > 0] > 0).mean()) < 0.60:
+        return False
 
-    along = float((mask[on_path > 0] > 0).mean())
-    around = float((mask[beside > 0] > 0).mean()) if beside.any() else 0.0
-    return along >= 0.45 and around <= along * 0.25
+    touched = np.unique(labels[(on_path > 0) & (mask > 0)])
+    touched = touched[touched != 0]
+    if touched.size == 0:
+        return False
+
+    # Thickness across the line, not along it: height for a horizontal rule,
+    # width for a vertical one. A double margin rule and a slightly skewed scan
+    # both stay within a handful of pixels; a letter does not.
+    thickness = heights[touched] if horizontal else heights[touched]
+    return float(np.median(thickness)) <= 8.0
 
 
 def remove_ruling(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -221,6 +241,10 @@ def remove_ruling(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     are removed, and only on rule rows.
     """
     height, width = mask.shape[:2]
+    # Deliberately no gap-bridging here. This pass has no guard against mistaking
+    # a line of writing for a rule, so it must only ever match ink that is
+    # *already* a long unbroken run. Dashed rules are caught by the Hough pass
+    # below, which is guarded by _looks_like_rule.
     horizontal = cv2.morphologyEx(
         mask,
         cv2.MORPH_OPEN,
@@ -256,6 +280,10 @@ def remove_ruling(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     # next - so letter stems that merely happen to line up at the left margin
     # are not mistaken for a ruled margin.
     broken = np.zeros_like(mask)
+    # One component pass for every Hough candidate on this page.
+    _, comp_labels, comp_stats, _ = cv2.connectedComponentsWithStats(cleaned, connectivity=8)
+    comp_h = comp_stats[:, cv2.CC_STAT_HEIGHT]
+    comp_w = comp_stats[:, cv2.CC_STAT_WIDTH]
     for is_vertical, length in ((False, width), (True, height)):
         min_length = int(length * 0.2)
         segments = cv2.HoughLinesP(
@@ -266,7 +294,10 @@ def remove_ruling(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         for x1, y1, x2, y2 in ([] if segments is None else segments.reshape(-1, 4)):
             dx, dy = abs(int(x2) - int(x1)), abs(int(y2) - int(y1))
             straight = dx >= 25 * dy if not is_vertical else dy >= 25 * dx
-            if straight and _looks_like_rule(cleaned, (int(x1), int(y1), int(x2), int(y2))):
+            across = comp_w if is_vertical else comp_h
+            if straight and _looks_like_rule(
+                cleaned, (int(x1), int(y1), int(x2), int(y2)), comp_labels, across
+            ):
                 cv2.line(broken, (int(x1), int(y1)), (int(x2), int(y2)), 255, 5)
 
     rule_rows = np.convolve(rule_rows, np.ones(9), mode="same") > 0
@@ -625,6 +656,75 @@ def merge_thin_lines(
     return merged
 
 
+def rescue_orphan_ink(
+    mask: np.ndarray,
+    boxes: list[tuple[int, int, int, int]],
+    median_height: float,
+) -> list[tuple[int, int, int, int]]:
+    """Recover lines the projection profile is too blunt to see.
+
+    A row holding a single character - a lone brace closing a block, a stray
+    operator, a one-digit answer - carries so little ink that the row never rises
+    above the text threshold, so the line is silently dropped. In prose that
+    costs little. In code it is fatal: the braces are the structure, and losing
+    them shifts every later line out of alignment with its true text.
+
+    So after segmentation, any ink not already inside a box is collected, grouped
+    into rows, and added back as lines of its own.
+    """
+    if not mask.any():
+        return boxes
+
+    height, width = mask.shape[:2]
+    covered = np.zeros(mask.shape, dtype=bool)
+    for x, y, w, h in boxes:
+        covered[y : y + h, x : x + w] = True
+
+    orphan = (mask > 0) & ~covered
+    if not orphan.any():
+        return boxes
+
+    count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        orphan.astype(np.uint8) * 255, connectivity=8
+    )
+    floor = max(median_height * 0.22, 6.0)
+    found: list[tuple[int, int, int, int]] = []
+    for index in range(1, count):
+        w = int(stats[index, cv2.CC_STAT_WIDTH])
+        h = int(stats[index, cv2.CC_STAT_HEIGHT])
+        area = int(stats[index, cv2.CC_STAT_AREA])
+        # Big enough to be a character, not a speck; not so wide it is a rule
+        # fragment that survived removal.
+        if h < floor or area < 25 or w > width * 0.5:
+            continue
+        found.append((int(stats[index, cv2.CC_STAT_LEFT]),
+                      int(stats[index, cv2.CC_STAT_TOP]), w, h))
+
+    if not found:
+        return boxes
+
+    # Characters sitting on the same baseline belong to one line.
+    found.sort(key=lambda b: b[1])
+    merged: list[list[int]] = []
+    for x, y, w, h in found:
+        if merged and y < merged[-1][1] + merged[-1][3] * 0.8:
+            mx, my, mw, mh = merged[-1]
+            nx0, ny0 = min(mx, x), min(my, y)
+            nx1, ny1 = max(mx + mw, x + w), max(my + mh, y + h)
+            merged[-1] = [nx0, ny0, nx1 - nx0, ny1 - ny0]
+        else:
+            merged.append([x, y, w, h])
+
+    pad = 8
+    for x, y, w, h in merged:
+        boxes.append((max(0, x - pad), max(0, y - pad),
+                      min(width - max(0, x - pad), w + 2 * pad),
+                      min(height - max(0, y - pad), h + 2 * pad)))
+
+    boxes.sort(key=lambda b: b[1])
+    return boxes
+
+
 def preprocess(
     image: np.ndarray, max_lines: int = 40
 ) -> tuple[np.ndarray, list[tuple[int, int, int, int]], PreprocessingReport]:
@@ -688,6 +788,7 @@ def preprocess(
         median_height = float(np.median([h for _, _, _, h in boxes]))
         boxes = merge_thin_lines(boxes, median_height)
         boxes = split_tall_lines(mask, boxes, median_height)
+        boxes = rescue_orphan_ink(mask, boxes, median_height)
     report.steps.append("segmented lines by projection profile")
 
     report.estimated_ink_coverage = round(float((mask > 0).mean()), 4)

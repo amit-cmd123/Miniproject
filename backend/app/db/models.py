@@ -291,6 +291,11 @@ class Evaluation(Base, TimestampMixin):
     criteria: Mapped[list["EvaluationCriterion"]] = relationship(
         back_populates="evaluation", order_by="EvaluationCriterion.position"
     )
+    # Read-only navigation to the answer this marked, and through it to the
+    # question. One-way on purpose: an Answer must not grow a list of its
+    # evaluations that callers could iterate without ordering them, because
+    # re-marking appends and the *latest* is almost always what is wanted.
+    answer: Mapped["Answer"] = relationship(viewonly=True)
 
 
 class EvaluationCriterion(Base, TimestampMixin):

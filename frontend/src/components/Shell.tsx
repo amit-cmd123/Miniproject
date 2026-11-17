@@ -10,13 +10,15 @@ interface NavItem {
   ready: boolean;
 }
 
+// Ordered as the work happens: read the page, define the standard, mark
+// against it, confirm the mark, then measure whether the marking was any good.
 const NAV: NavItem[] = [
   { id: "transcribe", label: "Transcribe", part: "Part 1", ready: true },
   { id: "library", label: "Answer library", part: "Part 1", ready: true },
-  { id: "rubrics", label: "Questions & rubrics", part: "Part 2", ready: false },
-  { id: "evaluation", label: "Evaluation", part: "Part 3", ready: false },
-  { id: "review", label: "Examiner review", part: "Part 4", ready: false },
-  { id: "validation", label: "Validation", part: "Part 4", ready: false },
+  { id: "rubrics", label: "Questions & rubrics", part: "Part 2", ready: true },
+  { id: "evaluation", label: "Evaluation", part: "Part 3", ready: true },
+  { id: "review", label: "Examiner review", part: "Part 4", ready: true },
+  { id: "validation", label: "Validation", part: "Part 4", ready: true },
 ];
 
 export function Shell({

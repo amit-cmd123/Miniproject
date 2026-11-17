@@ -182,9 +182,14 @@ class GeminiOCRProvider(OCRProvider):
         model: str = "gemini-3.5-flash",
         timeout_seconds: float = 90.0,
         thinking_level: str | None = "low",
+        fallback_models: list[str] | None = None,
     ) -> None:
         self._api_key = (api_key or "").strip() or None
         self._model = model
+        # Tried in order when the preferred model is overloaded. Google
+        # returns 503 on popular models often enough that a transcription run
+        # should move to another model rather than fail.
+        self._chain = list(dict.fromkeys([model] + list(fallback_models or [])))
         self._timeout = timeout_seconds
         self._thinking_level = thinking_level
         # Optional request features are switched off for the rest of the
@@ -215,9 +220,32 @@ class GeminiOCRProvider(OCRProvider):
         }
 
     def _post(self, body: dict) -> dict:
+        """Send the request, moving down the model chain if one is unusable."""
+        last: GeminiError | None = None
+        for index, candidate in enumerate(self._chain):
+            try:
+                return self._post_to(candidate, body)
+            except GeminiError as exc:
+                message = str(exc).lower()
+                switchable = any(
+                    hint in message
+                    for hint in ("high demand", "unavailable", "not available",
+                                 "quota", "overload", "did not respond",
+                                 "could not reach")
+                )
+                if not switchable or index == len(self._chain) - 1:
+                    raise
+                logger.warning(
+                    "Model %s is unusable (%s); falling back to %s",
+                    candidate, str(exc)[:120], self._chain[index + 1],
+                )
+                last = exc
+        raise last or GeminiError("No Gemini model could be reached.")
+
+    def _post_to(self, model: str, body: dict) -> dict:
         import httpx
 
-        url = f"{API_ROOT}/{self._model}:generateContent"
+        url = f"{API_ROOT}/{model}:generateContent"
         headers = {"x-goog-api-key": self._api_key or "", "Content-Type": "application/json"}
         delay = 2.0
         for attempt in range(3):
@@ -237,7 +265,7 @@ class GeminiOCRProvider(OCRProvider):
                 time.sleep(delay)
                 delay *= 2
                 continue
-            raise GeminiError(_explain(response.status_code, message, self._model))
+            raise GeminiError(_explain(response.status_code, message, model))
         raise GeminiError("Gemini did not respond.")  # pragma: no cover
 
     def _read(self, image_b64: str, temperature: float, want_logprobs: bool) -> dict:

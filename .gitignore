@@ -21,3 +21,29 @@ frontend/dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Handwriting samples: real people's writing, never committed.
+#
+# The exam *definition* (question paper, answer key, seed_exam.json) is tracked
+# and has to be - the application seeds its rubrics from it at startup. What is
+# excluded is the collected handwriting itself: the scanned booklets and the
+# page images and transcripts derived from them.
+#
+# This means the 2.9% character error rate in the README cannot be reproduced
+# from a fresh clone. That is a deliberate trade: the writers are identifiable
+# from their handwriting, and a public repository is the wrong place for it.
+# The benchmark report in data/benchmarks/ records the result; to re-run it, get
+# the booklets from the team.
+data/exam/scans/
+data/exam/pages/
+
+# Generated datasets and benchmark reports (large, reproducible from scripts)
+data/synthetic*/
+data/synthetic_pilot/
+data/train/
+data/benchmarks/
+models/
+data/*.zip
+# A zip written without an extension by an interrupted command leaves 38 MB of
+# dataset in data/ that the pattern above does not catch.
+data/zia*

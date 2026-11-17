@@ -2,13 +2,25 @@
 
 import type {
   Accuracy,
+  Analytics,
   AnswerDetail,
   AnswerWithOCR,
+  BookletResult,
+  BookletSegmentation,
+  ConfidenceWeights,
   DocumentTranscription,
+  Evaluation,
+  EvaluatorInfo,
+  Exam,
+  ExamDetail,
   OCRResult,
   PdfInspection,
   ProviderInfo,
+  Question,
+  Review,
   RoadmapPart,
+  Rubric,
+  RubricValidation,
   Thresholds,
 } from "./types";
 
@@ -23,6 +35,20 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+async function json<T>(
+  path: string,
+  method: "POST" | "PUT" | "PATCH",
+  body: unknown,
+): Promise<T> {
+  return unwrap(
+    await fetch(`${BASE}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
 }
 
 async function unwrap<T>(response: Response): Promise<T> {
@@ -116,5 +142,116 @@ export const api = {
 
   segmentationUrl(id: string): string {
     return `${BASE}/answers/${id}/segmentation`;
+  },
+
+  /* ---- Part 2: questions and rubrics ---- */
+
+  async exams(): Promise<Exam[]> {
+    return unwrap(await fetch(`${BASE}/exams`));
+  },
+
+  async exam(id: string): Promise<ExamDetail> {
+    return unwrap(await fetch(`${BASE}/exams/${id}`));
+  },
+
+  /** Load the bundled paper. Idempotent, so it is safe to call on open. */
+  async seedExam(replace = false): Promise<ExamDetail> {
+    return unwrap(
+      await fetch(`${BASE}/exams/seed?replace=${replace}`, { method: "POST" }),
+    );
+  },
+
+  async validateExam(id: string): Promise<RubricValidation> {
+    return unwrap(await fetch(`${BASE}/exams/${id}/validate`));
+  },
+
+  async questions(examId?: string): Promise<Question[]> {
+    const query = examId ? `?exam_id=${examId}&include_rubric=true` : "?include_rubric=true";
+    return unwrap(await fetch(`${BASE}/questions${query}`));
+  },
+
+  async rubric(questionId: string): Promise<Rubric> {
+    return unwrap(await fetch(`${BASE}/questions/${questionId}/rubric`));
+  },
+
+  /* ---- Part 3: evaluation ---- */
+
+  async evaluatorInfo(): Promise<EvaluatorInfo> {
+    return unwrap(await fetch(`${BASE}/evaluations/provider`));
+  },
+
+  async confidenceWeights(): Promise<ConfidenceWeights> {
+    return unwrap(await fetch(`${BASE}/config/confidence-weights`));
+  },
+
+  async evaluate(answerId: string, questionId?: string, samples?: number): Promise<Evaluation> {
+    return json("/evaluations", "POST", {
+      answer_id: answerId,
+      question_id: questionId,
+      samples,
+    });
+  },
+
+  async evaluation(id: string): Promise<Evaluation> {
+    return unwrap(await fetch(`${BASE}/evaluations/${id}`));
+  },
+
+  /** The marking queue: latest evaluation per answer, optionally filtered. */
+  async evaluations(
+    filters: { needsReview?: boolean; unreviewed?: boolean } = {},
+  ): Promise<Evaluation[]> {
+    const query = new URLSearchParams();
+    if (filters.needsReview) query.set("needs_review", "true");
+    if (filters.unreviewed) query.set("unreviewed", "true");
+    const suffix = query.toString() ? `?${query}` : "";
+    return unwrap(await fetch(`${BASE}/evaluations${suffix}`));
+  },
+
+  async answerEvaluations(answerId: string): Promise<Evaluation[]> {
+    return unwrap(await fetch(`${BASE}/answers/${answerId}/evaluations`));
+  },
+
+  /** Where each question's answer sits in a booklet, without marking it. */
+  async segmentation(documentRef: string, examId?: string): Promise<BookletSegmentation> {
+    const query = examId ? `?exam_id=${examId}` : "";
+    return unwrap(await fetch(`${BASE}/documents/${documentRef}/segmentation${query}`));
+  },
+
+  async evaluateBooklet(
+    documentRef: string,
+    options: { examId?: string; bookletRef?: string; samples?: number } = {},
+  ): Promise<BookletResult> {
+    return json("/documents/evaluate", "POST", {
+      document_ref: documentRef,
+      exam_id: options.examId,
+      booklet_ref: options.bookletRef,
+      samples: options.samples,
+    });
+  },
+
+  /* ---- Part 4: review and validation ---- */
+
+  async review(payload: {
+    evaluationId: string;
+    action: "accept" | "modify";
+    finalScore?: number;
+    comments?: string;
+    durationMs?: number;
+  }): Promise<Review> {
+    return json("/reviews", "POST", {
+      evaluation_id: payload.evaluationId,
+      action: payload.action,
+      final_score: payload.finalScore,
+      comments: payload.comments,
+      duration_ms: payload.durationMs ?? 0,
+    });
+  },
+
+  async reviews(evaluationId: string): Promise<Review[]> {
+    return unwrap(await fetch(`${BASE}/evaluations/${evaluationId}/reviews`));
+  },
+
+  async analytics(): Promise<Analytics> {
+    return unwrap(await fetch(`${BASE}/analytics/summary`));
   },
 };

@@ -55,13 +55,31 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EVALNOVA_GEMINI_API_KEY", "GEMINI_API_KEY"),
     )
     gemini_model: str = "gemini-3.5-flash"
+    # Tried in order when the chosen model is overloaded or unavailable.
+    # Google returns 503 on a popular model far more often than is convenient,
+    # and a marking run that dies because one model was busy is a worse
+    # outcome than one that completes on a slightly weaker model and says so.
+    # Comma-separated in the environment.
+    gemini_fallback_models: str = ""
     gemini_timeout_seconds: float = 90.0
     gemini_thinking_level: str | None = "low"
     # Fall back to the local engine when a Gemini request fails outright.
     gemini_fallback_to_local: bool = True
 
-    # ---- evaluation provider (Part 3 - not yet implemented) --------------
+    # ---- evaluation provider (Part 3) ------------------------------------
+    # "gemini" - rubric marking with a Gemini text model
+    # "mock"   - deterministic keyword baseline: no key, no network, no cost
     evaluation_provider: str = "mock"
+    # Blank means "use the same model as recognition". Marking benefits from a
+    # stronger model than transcription does, so it is separately settable.
+    evaluation_model: str | None = None
+    # Marking is reasoning rather than reading, so thinking is worth its
+    # latency here in a way it is not for transcription.
+    evaluation_thinking_level: str | None = "low"
+    # Independent readings per answer. The second is what makes confidence a
+    # measurement instead of an assertion; it also doubles the cost, so it is
+    # a setting. 1 disables the agreement signal and says so in the result.
+    evaluation_samples: int = 2
 
     # ---- uploads ---------------------------------------------------------
     max_upload_bytes: int = 25 * 1024 * 1024
@@ -78,6 +96,22 @@ class Settings(BaseSettings):
         "image/bmp",
         "image/tiff",
     )
+
+    @property
+    def gemini_model_chain(self) -> list[str]:
+        """The chosen model, then its fallbacks, de-duplicated in order."""
+        names = [self.gemini_model] + [
+            name.strip() for name in (self.gemini_fallback_models or "").split(",")
+        ]
+        return list(dict.fromkeys(name for name in names if name))
+
+    @property
+    def evaluation_model_chain(self) -> list[str]:
+        primary = self.evaluation_model or self.gemini_model
+        names = [primary] + [
+            name.strip() for name in (self.gemini_fallback_models or "").split(",")
+        ]
+        return list(dict.fromkeys(name for name in names if name))
 
     @property
     def images_dir(self) -> Path:
