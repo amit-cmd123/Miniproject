@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -120,24 +122,30 @@ def _collect_warnings(
     return warnings
 
 
-def transcribe_answer(
-    db: Session,
-    answer: Answer,
-    provider: OCRProvider,
-    *,
-    save_debug_overlay: bool = True,
-) -> OCRResult:
-    """Run the full pipeline for one answer and persist the result."""
+@dataclass
+class _PageRead:
+    """The result of reading one page, with no database touched yet.
+
+    Preprocessing and recognition are the slow part and need nothing from the
+    session, so they are separated out: that is what lets the pages of a
+    booklet be read concurrently without sharing a SQLAlchemy Session, which
+    is not thread-safe.
+    """
+
+    gray: np.ndarray
+    boxes: list
+    report: object
+    result: RecognitionResult
+    started: float
+
+
+def _read_page(image_path: str, provider: OCRProvider) -> _PageRead:
+    """Preprocess and recognise one page. No database, no mutation."""
     started = time.perf_counter()
 
-    answer.status = AnswerStatus.OCR_RUNNING
-    db.commit()
-
     try:
-        image = load_image(answer.image_path)
+        image = load_image(image_path)
     except ImageLoadError as exc:
-        answer.status = AnswerStatus.OCR_FAILED
-        db.commit()
         raise TranscriptionError(str(exc)) from exc
 
     try:
@@ -153,11 +161,117 @@ def transcribe_answer(
                 result = provider.recognise_page(image, line_images, boxes)
             else:
                 result = provider.recognise(line_images, boxes)
+    except TranscriptionError:
+        raise
     except Exception as exc:
+        logger.exception("Reading %s failed", image_path)
+        raise TranscriptionError(str(exc)) from exc
+
+    return _PageRead(gray=gray, boxes=boxes, report=report, result=result, started=started)
+
+
+def transcribe_answer(
+    db: Session,
+    answer: Answer,
+    provider: OCRProvider,
+    *,
+    save_debug_overlay: bool = True,
+) -> OCRResult:
+    """Run the full pipeline for one answer and persist the result."""
+    answer.status = AnswerStatus.OCR_RUNNING
+    db.commit()
+
+    try:
+        read = _read_page(answer.image_path, provider)
+    except TranscriptionError:
         answer.status = AnswerStatus.OCR_FAILED
         db.commit()
-        logger.exception("Transcription failed for answer %s", answer.id)
-        raise TranscriptionError(str(exc)) from exc
+        raise
+
+    return _store_page(db, answer, read, provider, save_debug_overlay=save_debug_overlay)
+
+
+def transcribe_many(
+    db: Session,
+    answers: list[Answer],
+    provider: OCRProvider,
+    *,
+    save_debug_overlay: bool = True,
+    max_workers: int | None = None,
+) -> tuple[dict[str, OCRResult], dict[str, str]]:
+    """Read several pages concurrently, then persist them in order.
+
+    The pages of a booklet are independent: each is preprocessed and sent to
+    the recogniser on its own. Reading them one after another made an eight
+    page script take eight times as long as it needed to, for an identical
+    result - the recogniser is handed exactly the same image either way.
+
+    The pool is bounded because the free tier answers a burst with 429, and
+    because preprocessing is real CPU work that does not get faster by being
+    oversubscribed.
+
+    Returns the record per answer id, and a message per answer id that
+    failed. A page that fails is reported in place; the rest of the booklet
+    is still read.
+    """
+    if not answers:
+        return {}, {}
+
+    for answer in answers:
+        answer.status = AnswerStatus.OCR_RUNNING
+    db.commit()
+
+    cap = max_workers or settings.ocr_max_concurrency
+    workers = max(1, min(cap, len(answers)))
+
+    reads: dict[str, _PageRead] = {}
+    failures: dict[str, str] = {}
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_read_page, answer.image_path, provider): answer.id
+            for answer in answers
+        }
+        for future in futures:
+            answer_id = futures[future]
+            try:
+                reads[answer_id] = future.result()
+            except TranscriptionError as exc:
+                failures[answer_id] = str(exc)
+            except Exception as exc:  # defensive: provider-specific failures
+                failures[answer_id] = str(exc)
+
+    records: dict[str, OCRResult] = {}
+    for answer in answers:
+        read = reads.get(answer.id)
+        if read is None:
+            answer.status = AnswerStatus.OCR_FAILED
+            db.commit()
+            continue
+        try:
+            records[answer.id] = _store_page(
+                db, answer, read, provider, save_debug_overlay=save_debug_overlay
+            )
+        except Exception as exc:
+            db.rollback()
+            answer.status = AnswerStatus.OCR_FAILED
+            db.commit()
+            failures[answer.id] = str(exc)
+
+    return records, failures
+
+
+def _store_page(
+    db: Session,
+    answer: Answer,
+    read: _PageRead,
+    provider: OCRProvider,
+    *,
+    save_debug_overlay: bool = True,
+) -> OCRResult:
+    """Score a finished read, persist it and audit it. No network."""
+    gray, boxes, report, result = read.gray, read.boxes, read.report, read.result
+    started = read.started
 
     if save_debug_overlay:
         _write_overlay(answer.id, gray, boxes)

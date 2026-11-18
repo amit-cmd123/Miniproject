@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import answers, roadmap
+from app.api.v1 import answers, evaluations, roadmap, rubrics
 from app.core.config import settings
 from app.db.session import init_db
 from app.providers.ocr.registry import get_ocr_provider
@@ -26,8 +26,12 @@ app = FastAPI(
     description=(
         "Confidence-aware, rubric-driven evaluation of handwritten examination "
         "answers.\n\n"
-        "**Part 1 (Handwriting & OCR) is implemented.** Parts 2-4 are registered "
-        "as planned endpoints that return 501 with the workstream that owns them."
+        "The pipeline runs end to end: a scanned booklet is transcribed "
+        "(Part 1), split per question and marked against a rubric with a "
+        "composite confidence (Parts 2-3), and routed to an examiner who "
+        "accepts or changes the score (Part 4). Every human decision is "
+        "stored as a new row beside the machine's, so agreement can be "
+        "measured rather than asserted."
     ),
 )
 
@@ -47,6 +51,12 @@ def on_startup() -> None:
     logger.info(
         "Recognition engine: %s (%s)", settings.ocr_provider, settings.ocr_model_name
     )
+    logger.info(
+        "Marking engine: %s (%s)",
+        settings.evaluation_provider,
+        settings.evaluation_model or settings.gemini_model,
+    )
+    _seed_bundled_exam()
 
     # Load the handwriting weights in the background. Without this the first
     # upload of a session pays ~10s of model loading on top of recognition,
@@ -60,6 +70,44 @@ def on_startup() -> None:
                            exc_info=True)
 
     threading.Thread(target=_warmup, name="ocr-warmup", daemon=True).start()
+
+
+def _seed_bundled_exam() -> None:
+    """Load the bundled paper and its rubrics if no exam exists yet.
+
+    Marking needs a rubric, and an application that starts with nothing to
+    mark against looks broken rather than empty. Seeding is idempotent by
+    subject code, so a restart never duplicates the paper, and an exam edited
+    through the API is left exactly as the user left it.
+    """
+    from app.api.v1.rubrics import SEED_PATH
+    from app.db.session import SessionLocal
+    from app.services import rubric_service
+
+    if not SEED_PATH.exists():
+        logger.info("No bundled exam at %s; none seeded", SEED_PATH)
+        return
+
+    with SessionLocal() as db:
+        try:
+            if rubric_service.list_exams(db):
+                logger.info("An exam is already defined; not seeding")
+                return
+            exam = rubric_service.seed_from_file(db, SEED_PATH)
+            report = rubric_service.validate_exam(db, exam)
+            logger.info(
+                "Seeded '%s': %s questions, %s criteria, %s marks (rubrics %s)",
+                exam.title,
+                report.questions_checked,
+                report.criteria_checked,
+                report.total_marks,
+                "valid" if report.is_valid else "INVALID",
+            )
+            for problem in report.problems:
+                if problem.severity == "error":
+                    logger.error("Rubric %s: %s", problem.question, problem.message)
+        except Exception:  # pragma: no cover - never block startup
+            logger.warning("Could not seed the bundled exam", exc_info=True)
 
 
 @app.exception_handler(Exception)
@@ -91,4 +139,8 @@ def health() -> dict[str, object]:
 
 
 app.include_router(answers.router, prefix=settings.api_prefix)
+app.include_router(rubrics.router, prefix=settings.api_prefix)
+app.include_router(evaluations.router, prefix=settings.api_prefix)
+# Registered last: it only serves build status and the few routes that are
+# still unimplemented, so a real router always wins the path.
 app.include_router(roadmap.router, prefix=settings.api_prefix)

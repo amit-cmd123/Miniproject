@@ -2,14 +2,47 @@
 
 Confidence-aware, rubric-driven evaluation of handwritten examination answers.
 
-**Status: Part 1 (Handwriting & OCR) is built and working.** Parts 2–4 exist as
-interface prototypes and as API endpoints that return `501` naming the
-workstream that owns them, so the contracts are fixed before the code is
-written.
+**Status: all four parts are built and run end to end.** A scanned booklet goes
+in; per-question marks, a criterion-by-criterion justification, a measured
+confidence and a review decision come out.
+
+### Measured, not claimed
+
+On the eight real handwritten booklet pages in `data/exam/pages`, transcribed
+against hand-written reference transcripts:
+
+| | Local TrOCR | **Gemini (current)** |
+|---|---|---|
+| Character error rate | 59.7% | **2.9%** |
+| Line recall | 131% (over-segmenting) | **101.7%** |
+| Seconds per page | ~10 | ~17 |
+
+Reproduce with `python scripts/benchmark.py --dataset data/exam/pages --provider gemini`.
+
+**What is *not* yet validated: the confidence calibration.** Every score carries
+a confidence built from four measured signals, but the weights combining them
+were chosen by hand. Whether "90% confident" really means a 10% chance of
+examiner disagreement needs reviewed answers to establish, and
+`GET /api/v1/analytics/summary` is the endpoint that will say so. Until then the
+top band is labelled an auto-accept *candidate* and still routes to a human.
+
+---
+
+## The whole pipeline in one command
+
+```bash
+.venv\Scripts\python scripts\demo_end_to_end.py
+```
+
+Takes a real booklet from `data/exam/scans/`, transcribes it, splits it per
+question, marks it against the rubric, shows the confidence breakdown and the
+review queue, and prints the validation metrics. Nothing is mocked.
 
 ---
 
 ## What works today
+
+### Part 1 — reading the handwriting
 
 Upload a photograph, a scan, or a **multi-page PDF answer booklet**, and the
 system will:
@@ -34,6 +67,45 @@ For a PDF, each page is rasterised and put through that same pipeline as its own
 answer, with its own confidence. Pages share a `document_ref` so the booklet
 stays together, and a page that fails is reported in place rather than
 discarding the rest.
+
+### Part 2 — what a correct answer must contain
+
+A paper is loaded from one JSON file (`data/exam/seed_exam.json`) as questions,
+answer keys and rubrics. Each rubric is a list of criteria, and each criterion
+says what it is testing, what counts as an acceptable alternative, whether it
+allows partial credit, and what it is worth.
+
+`GET /exams/{id}/validate` refuses a rubric that is not fit to mark with. The
+check that matters: **criteria must sum to the question's marks.** A rubric
+summing to 4.5 out of 5 caps every student at 90% and produces entirely
+plausible-looking scores — invisible in the output, obvious here. Marking is
+blocked until it is fixed.
+
+Rubrics are versioned. Editing one writes a new version and retires the old;
+evaluations record the version they used, so a past score stays explainable.
+
+### Part 3 — marking, and knowing when not to trust it
+
+1. The booklet's transcription is **split per question** — by the student's own
+   numbering where it exists (exact, free, and shown to the user), by a model
+   only when that fails
+2. Each answer is judged **criterion by criterion, twice, independently**
+3. **The model never sees a mark value and never adds anything up.** It returns
+   a verdict and a quotation per criterion; the marks are computed in Python.
+   Same verdicts, same score, every time
+4. Every verdict must **quote the student's own words**, and the quotation is
+   checked against the transcription — a quote that is not there is flagged and
+   the marks it supports are labelled unverified
+5. A **composite confidence** is computed from four measured signals and the
+   answer is routed accordingly
+
+### Part 4 — the examiner, and the measurement
+
+An examiner accepts or changes each score in one click. The decision is written
+as a **new row beside the machine's, never over it**, so machine–examiner
+agreement stays computable — which makes routine marking into calibration data.
+`GET /analytics/summary` reports agreement, mean absolute error, and the
+modification rate per confidence band.
 
 ---
 
@@ -211,7 +283,39 @@ Implemented:
 | `POST` | `/api/v1/answers/{id}/ocr/accuracy` | Character and word error rate |
 | `GET` | `/api/v1/ocr/provider` | Which engine is loaded, and is it ready |
 | `GET` | `/api/v1/config/thresholds` | The trust bands |
-| `GET` | `/api/v1/roadmap` | What is built and what is next |
+| `GET` | `/api/v1/roadmap` | What is built, and what is proven |
+
+**Part 2 — questions and rubrics**
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/exams/seed` | Load the bundled paper from disk (idempotent) |
+| `POST` | `/api/v1/exams` | Define a paper, keys and rubrics in one request |
+| `GET` | `/api/v1/exams/{id}` | A paper with every question and rubric |
+| `GET` | `/api/v1/exams/{id}/validate` | **Is every rubric fit to mark with?** |
+| `GET` | `/api/v1/questions` | The question bank |
+| `GET` | `/api/v1/questions/{id}/rubric` | The active rubric |
+| `PUT` | `/api/v1/questions/{id}/rubric` | Write a new rubric version |
+
+**Part 3 — marking**
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/documents/{ref}/segmentation` | Which text answers which question, before marking |
+| `POST` | `/api/v1/documents/evaluate` | Mark a whole transcribed booklet |
+| `POST` | `/api/v1/evaluations` | Mark one answer |
+| `GET` | `/api/v1/evaluations` | The marking queue (`?needs_review`, `?unreviewed`) |
+| `GET` | `/api/v1/evaluations/{id}` | One score with its full derivation |
+| `GET` | `/api/v1/evaluations/provider` | Which marker is configured |
+| `GET` | `/api/v1/config/confidence-weights` | The confidence signals and their weights |
+
+**Part 4 — review and validation**
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/reviews` | Accept or change a score (appended, never overwritten) |
+| `GET` | `/api/v1/evaluations/{id}/reviews` | Every human decision on one score |
+| `GET` | `/api/v1/analytics/summary` | Agreement, error, and modification rate per band |
 
 Registered but not implemented — they return `501` with the owning workstream:
 `/questions`, `/questions/{id}/rubric`, `/evaluations`, `/reviews`,
@@ -225,12 +329,33 @@ Copy `.env.example` to `.env`. Nothing is hard-coded in business logic.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `EVALNOVA_OCR_PROVIDER` | `trocr` | `gemini`, `trocr` or `mock` |
+| `EVALNOVA_OCR_PROVIDER` | `trocr` | `gemini`, `trocr` or `mock`. Use `gemini` — it is 20× more accurate on real pages |
 | `EVALNOVA_OCR_MODEL_NAME` | `microsoft/trocr-small-handwritten` | `-base-` is ~10× slower for no measurable gain on cleaned pages |
 | `EVALNOVA_GEMINI_API_KEY` | — | also read from `GEMINI_API_KEY` |
 | `EVALNOVA_GEMINI_MODEL` | `gemini-3.5-flash` | any Gemini model your key can use |
+| `EVALNOVA_GEMINI_FALLBACK_MODELS` | — | comma-separated; tried in order when the chosen model returns 503 |
+| `EVALNOVA_EVALUATION_PROVIDER` | `mock` | `gemini` for real marking; `mock` is the keyword baseline |
+| `EVALNOVA_EVALUATION_MODEL` | — | blank uses `EVALNOVA_GEMINI_MODEL` |
+| `EVALNOVA_EVALUATION_SAMPLES` | `2` | independent readings per answer. `1` halves the cost and loses the agreement signal |
 | `EVALNOVA_OCR_DEVICE` | `auto` | `auto` picks CUDA when available |
 | `EVALNOVA_DATABASE_URL` | SQLite in `data/` | Point at PostgreSQL to switch |
+
+### Which Gemini model to use
+
+Availability, not accuracy, is the practical constraint. Google returns
+`503 experiencing high demand` on popular models often enough to break a run,
+and pro models return `429` on a free tier. Find out what a key can actually
+reach:
+
+```bash
+.venv\Scripts\python scripts\check_gemini.py --list
+```
+
+It lists every model the key can see, then calls the configured ones to show
+which really answer. Verified working as of November 2026:
+`gemini-3.1-flash-lite`, `gemini-3-flash-preview`. The code walks
+`EVALNOVA_GEMINI_FALLBACK_MODELS` on a 503 and records which model actually
+served each result.
 
 ### Why SQLite rather than PostgreSQL right now
 

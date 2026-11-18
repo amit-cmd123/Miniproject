@@ -1,0 +1,279 @@
+{
+  "exam": {
+    "code": "EVN-PROG-01",
+    "title": "Programming Fundamentals in C - Class Test",
+    "subject": "Programming in C",
+    "total_marks": 30,
+    "duration_minutes": 45,
+    "scope_note": "Deliberately limited to introductory C programming. Narrow scope is what makes high marking accuracy achievable."
+  },
+  "questions": [
+    {
+      "number": "Q1",
+      "text": "State the difference between a while loop and a do-while loop. Give the syntax of each, and state one situation where do-while is the better choice.",
+      "topic": "control structures",
+      "question_type": "theory",
+      "max_marks": 5,
+      "answer_key": "A while loop is entry controlled. The condition is checked before the body is executed, so if the condition is false at the start the body never runs. A do-while loop is exit controlled. The body is executed first and the condition is checked afterwards, so the body always runs at least once. Syntax: while (condition) { statements } and do { statements } while (condition); do-while is better when the statements must run at least once, for example showing a menu before asking whether the user wants to continue.",
+      "criteria": [
+        {
+          "position": 1,
+          "description": "States that while checks the condition before executing the body",
+          "max_marks": 1.5,
+          "essential_concepts": ["condition checked before body", "entry controlled"],
+          "acceptable_alternatives": ["pre-test loop", "tests at the top", "may run zero times", "condition first"],
+          "common_mistakes": ["says while runs at least once"],
+          "allows_partial": false
+        },
+        {
+          "position": 2,
+          "description": "States that do-while checks the condition after executing the body",
+          "max_marks": 1.5,
+          "essential_concepts": ["condition checked after body", "exit controlled"],
+          "acceptable_alternatives": ["post-test loop", "tests at the bottom", "condition last"],
+          "common_mistakes": ["says do-while may run zero times"],
+          "allows_partial": false
+        },
+        {
+          "position": 3,
+          "description": "States that the do-while body executes at least once",
+          "max_marks": 1.0,
+          "essential_concepts": ["executes at least once"],
+          "acceptable_alternatives": ["runs once even if the condition is false", "guaranteed one iteration", "minimum one time"],
+          "common_mistakes": [],
+          "allows_partial": false
+        },
+        {
+          "position": 4,
+          "description": "Gives correct syntax for either loop, or a valid use case for do-while",
+          "max_marks": 1.0,
+          "essential_concepts": ["while (condition) { }", "do { } while (condition);"],
+          "acceptable_alternatives": ["menu example", "retry until valid input", "any correct syntax of either loop"],
+          "common_mistakes": ["omits the semicolon after the closing while - not penalised"],
+          "allows_partial": true
+        }
+      ]
+    },
+    {
+      "number": "Q2",
+      "text": "Write the output of the given program (a for loop from 1 to 5 that uses continue on even values and sums the rest) and explain in one or two lines why that output is produced.",
+      "topic": "loops and jump statements",
+      "question_type": "output_prediction",
+      "max_marks": 5,
+      "answer_key": "The output is 9. The loop runs from 1 to 5. When i is even the continue statement skips the addition, so only the odd numbers 1, 3 and 5 are added. 1 + 3 + 5 = 9.",
+      "criteria": [
+        {
+          "position": 1,
+          "description": "States that the output is 9",
+          "max_marks": 2.0,
+          "essential_concepts": ["9"],
+          "acceptable_alternatives": ["sum = 9", "output: 9", "answer is 9"],
+          "common_mistakes": ["15 - ignored continue", "6 - summed the even numbers"],
+          "allows_partial": false,
+          "load_bearing": true
+        },
+        {
+          "position": 2,
+          "description": "Explains that continue skips the even iterations",
+          "max_marks": 2.0,
+          "essential_concepts": ["continue skips even values"],
+          "acceptable_alternatives": ["skips when i%2==0", "even numbers are not added", "jumps to the next iteration"],
+          "common_mistakes": ["says continue exits the loop - that is break"],
+          "allows_partial": true
+        },
+        {
+          "position": 3,
+          "description": "Shows the odd numbers that are added: 1 + 3 + 5",
+          "max_marks": 1.0,
+          "essential_concepts": ["1 + 3 + 5"],
+          "acceptable_alternatives": ["only the odd numbers are summed", "1,3,5"],
+          "common_mistakes": [],
+          "allows_partial": false
+        }
+      ]
+    },
+    {
+      "number": "Q3",
+      "text": "The given program contains three errors. Identify each error and write the corrected line.",
+      "topic": "syntax and semantics",
+      "question_type": "error_identification",
+      "max_marks": 5,
+      "answer_key": "1. int n = 5 is missing a semicolon; it should be int n = 5; 2. if (n = 10) uses assignment instead of comparison; it should be if (n == 10). 3. The variable i is never declared; add int i; or write for (int i = 0; i < n; i++).",
+      "criteria": [
+        {
+          "position": 1,
+          "description": "Identifies the missing semicolon after int n = 5 and corrects it",
+          "max_marks": 1.5,
+          "essential_concepts": ["missing semicolon"],
+          "acceptable_alternatives": ["no ; at end of line", "statement not terminated", "semicolon missing"],
+          "common_mistakes": [],
+          "allows_partial": true
+        },
+        {
+          "position": 2,
+          "description": "Identifies that = should be == in the if condition and corrects it",
+          "max_marks": 2.0,
+          "essential_concepts": ["assignment instead of comparison", "== required"],
+          "acceptable_alternatives": ["should be ==", "= assigns, == compares", "comparison operator needed"],
+          "common_mistakes": ["calls it a syntax error - it compiles, so it is a logic error"],
+          "allows_partial": true,
+          "load_bearing": true
+        },
+        {
+          "position": 3,
+          "description": "Identifies that i is not declared and corrects it",
+          "max_marks": 1.5,
+          "essential_concepts": ["i not declared"],
+          "acceptable_alternatives": ["declare int i", "i is undefined", "missing declaration"],
+          "common_mistakes": [],
+          "allows_partial": true
+        }
+      ]
+    },
+    {
+      "number": "Q4",
+      "text": "Write a C program to check whether a number n is a prime number. Print Prime if it is prime and Not Prime otherwise.",
+      "topic": "loops and conditionals",
+      "question_type": "code_writing",
+      "max_marks": 5,
+      "answer_key": "#include <stdio.h>\nint main()\n{\n    int n, i, flag = 0;\n    scanf(\"%d\", &n);\n    for (i = 2; i < n; i++) {\n        if (n % i == 0) {\n            flag = 1;\n            break;\n        }\n    }\n    if (flag == 0)\n        printf(\"Prime\");\n    else\n        printf(\"Not Prime\");\n    return 0;\n}",
+      "criteria": [
+        {
+          "position": 1,
+          "description": "Declares the variables and obtains the value of n",
+          "max_marks": 1.0,
+          "essential_concepts": ["int n declared", "input taken or n supplied"],
+          "acceptable_alternatives": ["n passed as a function parameter", "n hard-coded with a value"],
+          "common_mistakes": [],
+          "allows_partial": true
+        },
+        {
+          "position": 2,
+          "description": "Uses a loop to test possible divisors of n",
+          "max_marks": 2.0,
+          "essential_concepts": ["loop starting at 2"],
+          "acceptable_alternatives": ["i <= n/2", "i*i <= n", "sqrt(n)", "while loop equivalent"],
+          "common_mistakes": ["starts at i = 1 so every number is Not Prime", "loops to i <= n so n divides itself"],
+          "allows_partial": true
+        },
+        {
+          "position": 3,
+          "description": "Tests divisibility using the modulus operator",
+          "max_marks": 1.0,
+          "essential_concepts": ["n % i == 0"],
+          "acceptable_alternatives": ["remainder is zero", "!(n%i)", "n mod i equals 0"],
+          "common_mistakes": ["uses division instead of modulus"],
+          "allows_partial": false
+        },
+        {
+          "position": 4,
+          "description": "Prints Prime or Not Prime on the correct branch",
+          "max_marks": 1.0,
+          "essential_concepts": ["correct branch printed"],
+          "acceptable_alternatives": ["flag variable", "early return", "any equivalent wording printed"],
+          "common_mistakes": ["prints inside the loop so it prints repeatedly"],
+          "allows_partial": true
+        }
+      ]
+    },
+    {
+      "number": "Q5",
+      "text": "What is a pointer? Explain the meaning of the & operator and the * operator. Write a short example of three lines using a pointer.",
+      "topic": "pointers",
+      "question_type": "theory",
+      "max_marks": 5,
+      "answer_key": "A pointer is a variable that stores the memory address of another variable. The & operator is the address-of operator; it gives the memory address of a variable. The * operator is the dereference operator; it gives the value stored at an address. Example: int x = 10; int *p = &x; printf(\"%d\", *p);",
+      "criteria": [
+        {
+          "position": 1,
+          "description": "States that a pointer stores the address of another variable",
+          "max_marks": 2.0,
+          "essential_concepts": ["stores an address", "of another variable"],
+          "acceptable_alternatives": ["holds the memory location of another variable", "points to a variable", "contains the address"],
+          "common_mistakes": ["says a pointer stores a value"],
+          "allows_partial": true
+        },
+        {
+          "position": 2,
+          "description": "Explains that & is the address-of operator",
+          "max_marks": 1.0,
+          "essential_concepts": ["gives the address"],
+          "acceptable_alternatives": ["returns the location of the variable", "reference operator", "address operator"],
+          "common_mistakes": ["swaps the meanings of & and *"],
+          "allows_partial": false
+        },
+        {
+          "position": 3,
+          "description": "Explains that * dereferences and gives the value at an address",
+          "max_marks": 1.0,
+          "essential_concepts": ["value at that address"],
+          "acceptable_alternatives": ["the value stored there", "indirection operator", "contents of the address"],
+          "common_mistakes": ["swaps the meanings of & and *"],
+          "allows_partial": false
+        },
+        {
+          "position": 4,
+          "description": "Gives a valid example of three lines using a pointer",
+          "max_marks": 1.0,
+          "essential_concepts": ["declaration", "address assigned to the pointer", "pointer used"],
+          "acceptable_alternatives": ["any correct snippet", "printf not required"],
+          "common_mistakes": ["assigns the value rather than the address: int *p = x;"],
+          "allows_partial": true
+        }
+      ]
+    },
+    {
+      "number": "Q6",
+      "text": "Write a C function that takes an integer array and its size, and returns the largest element in the array.",
+      "topic": "arrays and functions",
+      "question_type": "code_writing",
+      "max_marks": 5,
+      "answer_key": "int largest(int arr[], int n)\n{\n    int i, max;\n    max = arr[0];\n    for (i = 1; i < n; i++) {\n        if (arr[i] > max)\n            max = arr[i];\n    }\n    return max;\n}",
+      "criteria": [
+        {
+          "position": 1,
+          "description": "Correct function signature taking the array and its size",
+          "max_marks": 1.0,
+          "essential_concepts": ["array parameter", "size parameter"],
+          "acceptable_alternatives": ["int *arr", "void function that prints", "different parameter names"],
+          "common_mistakes": ["omits the size parameter"],
+          "allows_partial": true
+        },
+        {
+          "position": 2,
+          "description": "Initialises max with the first element of the array",
+          "max_marks": 1.0,
+          "essential_concepts": ["max = arr[0]"],
+          "acceptable_alternatives": ["initialises with INT_MIN", "initialises with a very small value"],
+          "common_mistakes": ["max = 0 which fails for an all-negative array"],
+          "allows_partial": false
+        },
+        {
+          "position": 3,
+          "description": "Loops through the array comparing each element",
+          "max_marks": 2.0,
+          "essential_concepts": ["loop over the elements", "if (arr[i] > max)"],
+          "acceptable_alternatives": ["while loop", "starts at i = 0"],
+          "common_mistakes": ["loops to i <= n which reads past the end"],
+          "allows_partial": true
+        },
+        {
+          "position": 4,
+          "description": "Returns or prints the largest value",
+          "max_marks": 1.0,
+          "essential_concepts": ["returns max"],
+          "acceptable_alternatives": ["prints the value instead of returning it"],
+          "common_mistakes": ["returns inside the loop"],
+          "allows_partial": false
+        }
+      ]
+    }
+  ],
+  "scoring_rules": {
+    "spelling_penalised": false,
+    "indentation_penalised": false,
+    "partial_credit": true,
+    "round_to": 0.5,
+    "note": "Criterion marks are summed by the scoring engine in Python, never by the model. The total is clamped to max_marks."
+  }
+}

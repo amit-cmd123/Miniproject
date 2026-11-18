@@ -55,13 +55,56 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("EVALNOVA_GEMINI_API_KEY", "GEMINI_API_KEY"),
     )
     gemini_model: str = "gemini-3.5-flash"
+    # Tried in order when the chosen model is overloaded or unavailable.
+    # Google returns 503 on a popular model far more often than is convenient,
+    # and a marking run that dies because one model was busy is a worse
+    # outcome than one that completes on a slightly weaker model and says so.
+    # Comma-separated in the environment.
+    gemini_fallback_models: str = ""
     gemini_timeout_seconds: float = 90.0
     gemini_thinking_level: str | None = "low"
     # Fall back to the local engine when a Gemini request fails outright.
     gemini_fallback_to_local: bool = True
 
-    # ---- evaluation provider (Part 3 - not yet implemented) --------------
+    # ---- evaluation provider (Part 3) ------------------------------------
+    # "gemini" - rubric marking with a Gemini text model
+    # "mock"   - deterministic keyword baseline: no key, no network, no cost
     evaluation_provider: str = "mock"
+    # Blank means "use the same model as recognition". Marking benefits from a
+    # stronger model than transcription does, so it is separately settable.
+    evaluation_model: str | None = None
+    # Marking is reasoning rather than reading, so thinking is worth its
+    # latency here in a way it is not for transcription.
+    evaluation_thinking_level: str | None = "low"
+    # Independent readings per answer. The second is what makes confidence a
+    # measurement instead of an assertion; it also doubles the cost, so it is
+    # a setting. 1 disables the agreement signal and says so in the result.
+    evaluation_samples: int = 2
+
+    # ---- concurrency -----------------------------------------------------
+    # Pages of a booklet, and questions within one, are independent requests
+    # that spend nearly all their time waiting on Google. Running them one at
+    # a time made an 8-page booklet take eight times longer than it needed to
+    # for no gain in quality - the model sees exactly the same bytes either
+    # way. These cap how many are in flight at once, because the free tier
+    # answers a burst with 429 and a 429 is slower than a queue.
+    # Requests per minute allowed to the Gemini API, across transcription and
+    # marking together. The free tier's real limit is 15; exceeding it returns
+    # 429 and "please retry in 28s", which made identical runs take 16s or
+    # 97s depending on luck. Holding requests to the limit trades a little
+    # queueing for a predictable total. 0 disables the cap - set that only on
+    # a paid key whose ceiling is far higher.
+    gemini_requests_per_minute: int = 15
+
+    ocr_max_concurrency: int = 4
+    # Readings per page. Gemini does not return logprobs for the flash models,
+    # so page confidence is measured by reading the page a second time and
+    # comparing. That is the whole transcription-confidence signal, and it
+    # doubles both the latency and the cost of transcription. Setting this to
+    # 1 halves the time and records confidence as *unmeasured* rather than
+    # quietly inventing a number for it.
+    ocr_confidence_samples: int = 2
+    evaluation_max_concurrency: int = 6
 
     # ---- uploads ---------------------------------------------------------
     max_upload_bytes: int = 25 * 1024 * 1024
@@ -78,6 +121,22 @@ class Settings(BaseSettings):
         "image/bmp",
         "image/tiff",
     )
+
+    @property
+    def gemini_model_chain(self) -> list[str]:
+        """The chosen model, then its fallbacks, de-duplicated in order."""
+        names = [self.gemini_model] + [
+            name.strip() for name in (self.gemini_fallback_models or "").split(",")
+        ]
+        return list(dict.fromkeys(name for name in names if name))
+
+    @property
+    def evaluation_model_chain(self) -> list[str]:
+        primary = self.evaluation_model or self.gemini_model
+        names = [primary] + [
+            name.strip() for name in (self.gemini_fallback_models or "").split(",")
+        ]
+        return list(dict.fromkeys(name for name in names if name))
 
     @property
     def images_dir(self) -> Path:

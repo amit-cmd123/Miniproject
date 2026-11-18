@@ -2,13 +2,30 @@
 
 import type {
   Accuracy,
+  Analytics,
   AnswerDetail,
+  AnswerKeyRecord,
   AnswerWithOCR,
+  BookletResult,
+  BookletSegmentation,
+  ConfidenceWeights,
   DocumentTranscription,
+  Evaluation,
+  EvaluatorInfo,
+  Exam,
+  ExamDetail,
   OCRResult,
   PdfInspection,
   ProviderInfo,
+  Question,
+  QuestionDraft,
+  QuestionPatch,
+  Review,
   RoadmapPart,
+  Rubric,
+  RubricDraft,
+  RubricValidation,
+  RubricVersion,
   Thresholds,
 } from "./types";
 
@@ -23,6 +40,20 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.status = status;
   }
+}
+
+async function json<T>(
+  path: string,
+  method: "POST" | "PUT" | "PATCH",
+  body: unknown,
+): Promise<T> {
+  return unwrap(
+    await fetch(`${BASE}${path}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
 }
 
 async function unwrap<T>(response: Response): Promise<T> {
@@ -116,5 +147,187 @@ export const api = {
 
   segmentationUrl(id: string): string {
     return `${BASE}/answers/${id}/segmentation`;
+  },
+
+  /* ---- Part 2: questions and rubrics ---- */
+
+  async exams(): Promise<Exam[]> {
+    return unwrap(await fetch(`${BASE}/exams`));
+  },
+
+  async exam(id: string): Promise<ExamDetail> {
+    return unwrap(await fetch(`${BASE}/exams/${id}`));
+  },
+
+  /** Start an empty paper. Questions and rubrics are added to it afterwards. */
+  async createExam(payload: {
+    title: string;
+    subject: string;
+    subject_code?: string | null;
+    term?: string | null;
+  }): Promise<ExamDetail> {
+    return json(`/exams`, "POST", { ...payload, questions: [] });
+  },
+
+  /** Load the bundled paper. Idempotent, so it is safe to call on open. */
+  async seedExam(replace = false): Promise<ExamDetail> {
+    return unwrap(
+      await fetch(`${BASE}/exams/seed?replace=${replace}`, { method: "POST" }),
+    );
+  },
+
+  async validateExam(id: string): Promise<RubricValidation> {
+    return unwrap(await fetch(`${BASE}/exams/${id}/validate`));
+  },
+
+  async questions(examId?: string): Promise<Question[]> {
+    const query = examId ? `?exam_id=${examId}&include_rubric=true` : "?include_rubric=true";
+    return unwrap(await fetch(`${BASE}/questions${query}`));
+  },
+
+  async rubric(questionId: string): Promise<Rubric> {
+    return unwrap(await fetch(`${BASE}/questions/${questionId}/rubric`));
+  },
+
+  /* ---- Part 2: editing the paper ----
+   *
+   * A rubric is never mutated in place: `saveRubric` writes a new version and
+   * retires the previous one, so a score awarded last term still resolves to
+   * the rubric it was actually marked against. The same is true of answer
+   * keys. That is why these are PUTs that return a new version number rather
+   * than PATCHes.
+   */
+
+  async addQuestion(examId: string, draft: QuestionDraft): Promise<Question> {
+    return json(`/exams/${examId}/questions`, "POST", draft);
+  },
+
+  async updateQuestion(questionId: string, patch: QuestionPatch): Promise<Question> {
+    return json(`/questions/${questionId}`, "PATCH", patch);
+  },
+
+  async deleteQuestion(questionId: string): Promise<void> {
+    const response = await fetch(`${BASE}/questions/${questionId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) await unwrap(response);
+  },
+
+  /** Writes a NEW rubric version. The old one is kept, deactivated. */
+  async saveRubric(questionId: string, draft: RubricDraft): Promise<Rubric> {
+    return json(`/questions/${questionId}/rubric`, "PUT", draft);
+  },
+
+  async rubricVersions(questionId: string): Promise<RubricVersion[]> {
+    return unwrap(await fetch(`${BASE}/questions/${questionId}/rubric/versions`));
+  },
+
+  async answerKey(questionId: string): Promise<AnswerKeyRecord> {
+    return unwrap(await fetch(`${BASE}/questions/${questionId}/answer-key`));
+  },
+
+  /** Writes a NEW answer-key version. */
+  async saveAnswerKey(
+    questionId: string,
+    referenceAnswer: string,
+  ): Promise<AnswerKeyRecord> {
+    return json(`/questions/${questionId}/answer-key`, "PUT", {
+      reference_answer: referenceAnswer,
+    });
+  },
+
+  /** The paper as seed JSON, in the same shape `data/exam/seed_exam.json` uses. */
+  async exportExam(examId: string): Promise<Record<string, unknown>> {
+    return unwrap(await fetch(`${BASE}/exams/${examId}/export`));
+  },
+
+  async importExam(document: unknown): Promise<ExamDetail> {
+    return json(`/exams/import`, "POST", document);
+  },
+
+  async deleteExam(examId: string): Promise<void> {
+    const response = await fetch(`${BASE}/exams/${examId}`, { method: "DELETE" });
+    if (!response.ok) await unwrap(response);
+  },
+
+  /* ---- Part 3: evaluation ---- */
+
+  async evaluatorInfo(): Promise<EvaluatorInfo> {
+    return unwrap(await fetch(`${BASE}/evaluations/provider`));
+  },
+
+  async confidenceWeights(): Promise<ConfidenceWeights> {
+    return unwrap(await fetch(`${BASE}/config/confidence-weights`));
+  },
+
+  async evaluate(answerId: string, questionId?: string, samples?: number): Promise<Evaluation> {
+    return json("/evaluations", "POST", {
+      answer_id: answerId,
+      question_id: questionId,
+      samples,
+    });
+  },
+
+  async evaluation(id: string): Promise<Evaluation> {
+    return unwrap(await fetch(`${BASE}/evaluations/${id}`));
+  },
+
+  /** The marking queue: latest evaluation per answer, optionally filtered. */
+  async evaluations(
+    filters: { needsReview?: boolean; unreviewed?: boolean } = {},
+  ): Promise<Evaluation[]> {
+    const query = new URLSearchParams();
+    if (filters.needsReview) query.set("needs_review", "true");
+    if (filters.unreviewed) query.set("unreviewed", "true");
+    const suffix = query.toString() ? `?${query}` : "";
+    return unwrap(await fetch(`${BASE}/evaluations${suffix}`));
+  },
+
+  async answerEvaluations(answerId: string): Promise<Evaluation[]> {
+    return unwrap(await fetch(`${BASE}/answers/${answerId}/evaluations`));
+  },
+
+  /** Where each question's answer sits in a booklet, without marking it. */
+  async segmentation(documentRef: string, examId?: string): Promise<BookletSegmentation> {
+    const query = examId ? `?exam_id=${examId}` : "";
+    return unwrap(await fetch(`${BASE}/documents/${documentRef}/segmentation${query}`));
+  },
+
+  async evaluateBooklet(
+    documentRef: string,
+    options: { examId?: string; bookletRef?: string; samples?: number } = {},
+  ): Promise<BookletResult> {
+    return json("/documents/evaluate", "POST", {
+      document_ref: documentRef,
+      exam_id: options.examId,
+      booklet_ref: options.bookletRef,
+      samples: options.samples,
+    });
+  },
+
+  /* ---- Part 4: review and validation ---- */
+
+  async review(payload: {
+    evaluationId: string;
+    action: "accept" | "modify";
+    finalScore?: number;
+    comments?: string;
+    durationMs?: number;
+  }): Promise<Review> {
+    return json("/reviews", "POST", {
+      evaluation_id: payload.evaluationId,
+      action: payload.action,
+      final_score: payload.finalScore,
+      comments: payload.comments,
+      duration_ms: payload.durationMs ?? 0,
+    });
+  },
+
+  async reviews(evaluationId: string): Promise<Review[]> {
+    return unwrap(await fetch(`${BASE}/evaluations/${evaluationId}/reviews`));
+  },
+
+  async analytics(): Promise<Analytics> {
+    return unwrap(await fetch(`${BASE}/analytics/summary`));
   },
 };

@@ -303,10 +303,22 @@ class ApiTests(unittest.TestCase):
     def test_unknown_answer_is_404(self) -> None:
         self.assertEqual(self.client.get("/api/v1/answers/nope").status_code, 404)
 
-    def test_planned_endpoints_name_their_workstream(self) -> None:
-        response = self.client.post("/api/v1/evaluations")
-        self.assertEqual(response.status_code, 501)
-        self.assertEqual(response.json()["detail"]["workstream"], "Part 3")
+    def test_every_part_is_reported_as_built(self) -> None:
+        """The roadmap is served, not written down, so it cannot go stale."""
+        body = self.client.get("/api/v1/roadmap").json()
+        self.assertEqual(
+            [part["status"] for part in body["parts"]], ["available"] * 4
+        )
+        # What is built and what is proven are different claims, and the
+        # roadmap has to keep saying so.
+        self.assertTrue(body["not_yet_validated"])
+
+    def test_marking_an_unknown_answer_is_404_not_501(self) -> None:
+        """Part 3 is implemented, so its route no longer reports itself planned."""
+        response = self.client.post(
+            "/api/v1/evaluations", json={"answer_id": "no-such-answer"}
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_thresholds_are_served_not_hard_coded(self) -> None:
         body = self.client.get("/api/v1/config/thresholds").json()

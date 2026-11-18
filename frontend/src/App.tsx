@@ -2,7 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { Shell, type View } from "./components/Shell";
 import { Transcribe } from "./views/Transcribe";
 import { Library } from "./views/Library";
-import { Evaluation, Review, Rubrics, Validation } from "./views/Planned";
+import { Rubrics } from "./views/Rubrics";
+import { Evaluate } from "./views/Evaluate";
+import { ReviewQueue } from "./views/ReviewQueue";
+import { Validation } from "./views/Validation";
 import { api } from "./lib/api";
 import type { ProviderInfo } from "./lib/types";
 
@@ -37,6 +40,9 @@ export default function App() {
     };
   }, []);
 
+  // Bumped whenever work lands, so a screen opened afterwards shows it. Each
+  // view reloads on its own rather than the app holding one shared cache -
+  // the cost of a refetch is nothing next to the cost of showing stale marks.
   const onSaved = useCallback(() => setRefreshKey((k) => k + 1), []);
 
   return (
@@ -44,9 +50,9 @@ export default function App() {
       {view === "transcribe" && <Transcribe onSaved={onSaved} />}
       {view === "library" && <Library refreshKey={refreshKey} />}
       {view === "rubrics" && <Rubrics />}
-      {view === "evaluation" && <Evaluation />}
-      {view === "review" && <Review />}
-      {view === "validation" && <Validation />}
+      {view === "evaluation" && <Evaluate refreshKey={refreshKey} />}
+      {view === "review" && <ReviewQueue refreshKey={refreshKey} />}
+      {view === "validation" && <Validation refreshKey={refreshKey} />}
     </Shell>
   );
 }

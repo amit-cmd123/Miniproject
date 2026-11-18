@@ -54,11 +54,14 @@ def get_ocr_provider() -> OCRProvider:
             )
             return _local_provider()
 
+        chain = settings.gemini_model_chain
         gemini = GeminiOCRProvider(
             api_key=settings.gemini_api_key,
-            model=settings.gemini_model,
+            model=chain[0],
             timeout_seconds=settings.gemini_timeout_seconds,
             thinking_level=settings.gemini_thinking_level,
+            confidence_samples=settings.ocr_confidence_samples,
+            fallback_models=chain[1:],
         )
         if not settings.gemini_fallback_to_local:
             return gemini
