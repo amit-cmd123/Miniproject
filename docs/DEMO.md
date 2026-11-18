@@ -194,3 +194,73 @@ records agreement as *unmeasured* rather than quietly assuming it.
 
 Nothing in that table needs hiding. A demo where the failure modes are
 explainable is stronger than one where everything happens to work.
+
+---
+
+## Speed, and the thing that actually limits it
+
+**The binding constraint is the free tier's quota, not the code.** Measured
+from a 429 body on this key:
+
+```
+Quota exceeded for metric: generate_content_free_tier_requests,
+limit: 15, model: gemini-3.1-flash-lite
+```
+
+Fifteen requests per minute, shared by transcription and marking. What one
+three-page booklet needs:
+
+| Work | Requests |
+|---|---|
+| 3 pages × 2 readings (the transcription-confidence signal) | 6 |
+| 5 attempted questions × 2 samples (the agreement signal) | 10 |
+| **Total** | **16** |
+
+Sixteen against a limit of fifteen, so a single booklet exceeds the minute's
+allowance on its own. Before this was understood, identical runs took 16s,
+97s and 200s depending on where the rolling window happened to be — the
+variance was the quota, not the model.
+
+Three things were done about it:
+
+1. **Pages and questions are now sent concurrently** rather than one at a
+   time. The model sees identical bytes, so the marks are unchanged.
+2. **A shared request limiter** holds the application to the quota instead of
+   being refused and retrying into a limit that has not reset. Requests queue;
+   they no longer storm.
+3. **An overloaded model is waited out, not switched away from.** The
+   preferred model answers in ~0.8s and the fallbacks in 2–9s, so abandoning
+   the primary on its first 503 moved a whole run onto a model eleven times
+   slower. Measured: it made the run four times longer.
+
+### Measured, same booklet, same marks
+
+| Mode | Wall clock | Marks | Confidence |
+|---|---|---|---|
+| Default (2 readings each) | **139s** | 15.5/30 | measured; 2 of 5 routed to review |
+| `EVALNOVA_*_SAMPLES=1` | **59s** | 15.5/30 | **unmeasured**; all 5 routed to review |
+
+The scores are identical. What the fast mode costs is the *confidence
+measurement* — transcription confidence falls to 49.9% and every question
+lands in "Detailed verification", which is the system correctly reporting
+that it does not know how sure it is. That is the honest trade and it is a
+setting, not a default.
+
+**There is no way to get both on this tier.** The second reading is the only
+source of transcription confidence: no flash model exposes logprobs
+(`Logprobs is not enabled for this model` on all four tested), so confidence
+cannot come free from a single call. A paid tier raises the ceiling to
+thousands of requests per minute, and the concurrency added here is what
+would then pay off.
+
+### Before a demo
+
+```powershell
+.venv\Scripts\python scripts\check_gemini.py --list
+```
+
+If you need the run to be quick rather than defensible — a five-minute slot,
+a flaky connection — set both sample counts to 1 in `.env` and **say on the
+slide that confidence is unmeasured in that mode.** Reporting a fast run's
+scores while implying the confidence numbers mean something would be the one
+dishonest thing available here.

@@ -60,6 +60,7 @@ def get_ocr_provider() -> OCRProvider:
             model=chain[0],
             timeout_seconds=settings.gemini_timeout_seconds,
             thinking_level=settings.gemini_thinking_level,
+            confidence_samples=settings.ocr_confidence_samples,
             fallback_models=chain[1:],
         )
         if not settings.gemini_fallback_to_local:

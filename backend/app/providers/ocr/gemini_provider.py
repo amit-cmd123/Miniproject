@@ -33,12 +33,15 @@ from __future__ import annotations
 import base64
 import difflib
 import logging
+import random
+import re
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
+from app.providers.rate_limit import get_limiter
 from app.providers.ocr.base import (
     OCRProvider,
     ProviderInfo,
@@ -54,6 +57,11 @@ NO_HANDWRITING = "NO_HANDWRITING"
 # image tokens keep growing.
 MAX_IMAGE_SIDE = 2400
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# "I am busy" rather than "I broke". Another model will serve these right
+# now, so with a fallback available they are switched on rather than waited
+# out: six seconds of backoff against a model that has just said it is
+# overloaded usually ends in the same 503.
+OVERLOADED_STATUS = {429, 503}
 
 PROMPT_VERSION = "ocr-page-v1"
 INSTRUCTIONS = """You transcribe photographed pages of handwritten university examination answer booklets.
@@ -183,6 +191,7 @@ class GeminiOCRProvider(OCRProvider):
         timeout_seconds: float = 90.0,
         thinking_level: str | None = "low",
         fallback_models: list[str] | None = None,
+        confidence_samples: int = 2,
     ) -> None:
         self._api_key = (api_key or "").strip() or None
         self._model = model
@@ -196,6 +205,9 @@ class GeminiOCRProvider(OCRProvider):
         # session the first time the API rejects them.
         self._logprobs_supported: bool | None = None
         self._thinking_supported = bool(thinking_level)
+        # 1 means do not read the page twice. Confidence is then reported as
+        # unmeasured, which is honest; it is never guessed at.
+        self._confidence_samples = max(1, int(confidence_samples))
 
     # -- the request -------------------------------------------------------
 
@@ -224,7 +236,9 @@ class GeminiOCRProvider(OCRProvider):
         last: GeminiError | None = None
         for index, candidate in enumerate(self._chain):
             try:
-                return self._post_to(candidate, body)
+                return self._post_to(
+                    candidate, body, has_fallback=index < len(self._chain) - 1
+                )
             except GeminiError as exc:
                 message = str(exc).lower()
                 switchable = any(
@@ -242,27 +256,44 @@ class GeminiOCRProvider(OCRProvider):
                 last = exc
         raise last or GeminiError("No Gemini model could be reached.")
 
-    def _post_to(self, model: str, body: dict) -> dict:
+    def _post_to(self, model: str, body: dict, *, has_fallback: bool = False) -> dict:
         import httpx
 
         url = f"{API_ROOT}/{model}:generateContent"
         headers = {"x-goog-api-key": self._api_key or "", "Content-Type": "application/json"}
-        delay = 2.0
-        for attempt in range(3):
+        # The preferred model is several times faster than every fallback, so
+        # an overloaded primary is waited out rather than switched away from:
+        # short jittered retries here beat a slower model doing the work.
+        attempts, delay = (4, 0.75) if has_fallback else (3, 2.0)
+        limiter = get_limiter()
+        for attempt in range(attempts):
+            limiter.acquire()
             try:
                 response = httpx.post(url, json=body, headers=headers, timeout=self._timeout)
             except httpx.HTTPError as exc:
-                if attempt == 2:
+                if attempt == attempts - 1:
                     raise GeminiError(f"Could not reach Gemini: {exc}") from exc
-                time.sleep(delay)
+                time.sleep(delay * random.uniform(0.6, 1.4))
                 delay *= 2
                 continue
             if response.status_code == 200:
                 return response.json()
             message = _error_message(response)
-            if response.status_code in RETRYABLE_STATUS and attempt < 2:
+            if response.status_code == 429:
+                # Google says how long to wait; obeying it beats guessing.
+                match = re.search(r"retry in ([0-9.]+)s", message, re.I)
+                if match:
+                    try:
+                        limiter.penalise(min(float(match.group(1)), 60.0))
+                    except ValueError:
+                        pass
+            if response.status_code in RETRYABLE_STATUS and attempt < attempts - 1:
                 logger.warning("Gemini returned %s (%s); retrying", response.status_code, message)
-                time.sleep(delay)
+                # Jittered: pages are read concurrently now, so an overloaded
+                # model 503s several of them in the same instant. Without
+                # jitter they all sleep the same two seconds and retry
+                # together, reproducing the burst that caused the 503.
+                time.sleep(delay * random.uniform(0.6, 1.4))
                 delay *= 2
                 continue
             raise GeminiError(_explain(response.status_code, message, model))
@@ -301,7 +332,8 @@ class GeminiOCRProvider(OCRProvider):
         image_b64 = _encode_jpeg(page)
         second_future = None
         pool = None
-        if self._logprobs_supported is False:
+        twice = self._confidence_samples > 1
+        if twice and self._logprobs_supported is False:
             # Already known: confidence must come from a second reading, so
             # start it now and let both requests run at the same time.
             pool = ThreadPoolExecutor(max_workers=1)
@@ -318,7 +350,17 @@ class GeminiOCRProvider(OCRProvider):
                 confidences = line_confidences_from_logprobs(text, tokens)
                 if confidences is not None:
                     self._logprobs_supported = True
-            if lines and confidences is None:
+            if lines and confidences is None and not twice:
+                # One reading was asked for, so there is nothing to compare
+                # against. Say so rather than inventing a number.
+                confidences = [0.5] * len(lines)
+                result.confidence_method = "unmeasured"
+                result.warnings.append(
+                    "Confidence was not measured for this page: it was read "
+                    "once (EVALNOVA_OCR_CONFIDENCE_SAMPLES=1), so it is shown "
+                    "as 50%. Check the text by eye."
+                )
+            elif lines and confidences is None:
                 if second_future is None:
                     pool = ThreadPoolExecutor(max_workers=1)
                     second_future = pool.submit(self._read, image_b64, 1.0, False)

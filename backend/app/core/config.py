@@ -81,6 +81,31 @@ class Settings(BaseSettings):
     # a setting. 1 disables the agreement signal and says so in the result.
     evaluation_samples: int = 2
 
+    # ---- concurrency -----------------------------------------------------
+    # Pages of a booklet, and questions within one, are independent requests
+    # that spend nearly all their time waiting on Google. Running them one at
+    # a time made an 8-page booklet take eight times longer than it needed to
+    # for no gain in quality - the model sees exactly the same bytes either
+    # way. These cap how many are in flight at once, because the free tier
+    # answers a burst with 429 and a 429 is slower than a queue.
+    # Requests per minute allowed to the Gemini API, across transcription and
+    # marking together. The free tier's real limit is 15; exceeding it returns
+    # 429 and "please retry in 28s", which made identical runs take 16s or
+    # 97s depending on luck. Holding requests to the limit trades a little
+    # queueing for a predictable total. 0 disables the cap - set that only on
+    # a paid key whose ceiling is far higher.
+    gemini_requests_per_minute: int = 15
+
+    ocr_max_concurrency: int = 4
+    # Readings per page. Gemini does not return logprobs for the flash models,
+    # so page confidence is measured by reading the page a second time and
+    # comparing. That is the whole transcription-confidence signal, and it
+    # doubles both the latency and the cost of transcription. Setting this to
+    # 1 halves the time and records confidence as *unmeasured* rather than
+    # quietly inventing a number for it.
+    ocr_confidence_samples: int = 2
+    evaluation_max_concurrency: int = 6
+
     # ---- uploads ---------------------------------------------------------
     max_upload_bytes: int = 25 * 1024 * 1024
     # A scanned multi-page booklet at 200-300 DPI runs to tens of megabytes,

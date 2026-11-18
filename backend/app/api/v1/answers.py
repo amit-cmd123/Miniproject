@@ -320,6 +320,10 @@ async def transcribe_document(
     records: list[OCRResult] = []
     warnings: list[str] = []
 
+    # Register every page first, then read them concurrently. Reading them one
+    # at a time meant a booklet's wait was the sum of its pages even though
+    # each page is an independent request that spends its time waiting.
+    registered: list[tuple[int, object]] = []
     for page in rendered:
         try:
             png = pdf_service.encode_png(page.image)
@@ -334,20 +338,35 @@ async def transcribe_document(
                 source_filename=file.filename,
                 skip_validation=True,
             )
-            record = ocr_service.transcribe_answer(db, answer, provider)
-            records.append(record)
-            results.append(
-                PageResultOut(
-                    page_number=page.page_number,
-                    answer=_answer_out(answer),
-                    ocr=_ocr_out(record),
-                )
-            )
+            registered.append((page.page_number, answer))
         except (TranscriptionError, PdfError) as exc:
             # One bad page must not lose the whole booklet.
             logger.warning("Page %s failed: %s", page.page_number, exc)
             warnings.append(f"Page {page.page_number} could not be read: {exc}")
             results.append(PageResultOut(page_number=page.page_number, error=str(exc)))
+
+    transcribed, failures = ocr_service.transcribe_many(
+        db, [answer for _, answer in registered], provider
+    )
+
+    for page_number, answer in registered:
+        record = transcribed.get(answer.id)
+        if record is None:
+            reason = failures.get(answer.id, "the page could not be read.")
+            logger.warning("Page %s failed: %s", page_number, reason)
+            warnings.append(f"Page {page_number} could not be read: {reason}")
+            results.append(PageResultOut(page_number=page_number, error=reason))
+            continue
+        records.append(record)
+        results.append(
+            PageResultOut(
+                page_number=page_number,
+                answer=_answer_out(answer),
+                ocr=_ocr_out(record),
+            )
+        )
+
+    results.sort(key=lambda r: r.page_number)
 
     if not records:
         raise HTTPException(

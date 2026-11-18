@@ -23,6 +23,8 @@ from pathlib import Path
 # the developer's shell would defeat the point.
 os.environ["EVALNOVA_OCR_PROVIDER"] = "mock"
 os.environ["EVALNOVA_EVALUATION_PROVIDER"] = "mock"
+# No network in the unit suite, so nothing should ever wait for a slot.
+os.environ["EVALNOVA_GEMINI_REQUESTS_PER_MINUTE"] = "0"
 os.environ["EVALNOVA_GEMINI_API_KEY"] = ""
 os.environ["GEMINI_API_KEY"] = ""
 

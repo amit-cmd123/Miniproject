@@ -79,6 +79,47 @@ class QuestionIn(BaseModel):
     rubric: RubricIn | None = None
 
 
+class QuestionPatch(BaseModel):
+    """A partial edit to a question. Omitted fields are left alone.
+
+    The rubric is deliberately not editable here: it is versioned, so it is
+    replaced through its own endpoint and never mutated in place.
+    """
+
+    number: str | None = Field(default=None, max_length=20)
+    text: str | None = Field(default=None, min_length=3, max_length=5000)
+    topic: str | None = Field(default=None, max_length=160)
+    question_type: str | None = Field(default=None, max_length=40)
+    max_marks: float | None = Field(default=None, gt=0, le=100)
+
+
+class AnswerKeyIn(BaseModel):
+    reference_answer: str = Field(min_length=1, max_length=20_000)
+
+
+class AnswerKeyOut(BaseModel):
+    id: str
+    question_id: str
+    version: int
+    is_active: bool
+    reference_answer: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RubricVersionOut(BaseModel):
+    """One entry in a question's rubric history."""
+
+    id: str
+    version: int
+    is_active: bool
+    criteria_count: int
+    total_criterion_marks: float
+    marking_scheme: str | None = None
+    created_at: datetime
+
+
 class QuestionOut(BaseModel):
     id: str
     exam_id: str

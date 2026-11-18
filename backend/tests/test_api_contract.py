@@ -229,6 +229,119 @@ class FrontendContractTests(unittest.TestCase):
             "modification_rate", "mean_absolute_delta",
         )
 
+    # -- the Rubrics view's editing controls -------------------------------
+
+    def test_the_rubric_editor_sequence(self) -> None:
+        """add question -> edit it -> write a rubric -> history -> key -> delete.
+
+        The editor is the only way to change a marking scheme without editing
+        a JSON file and restarting, so every call it makes is pinned here.
+        """
+        exam = self.client.post(
+            "/api/v1/exams",
+            json={
+                "title": "Contract editing paper",
+                "subject": "Computer Science",
+                "subject_code": "CONTRACT-EDIT",
+                "questions": [],
+            },
+        )
+        self.assertEqual(exam.status_code, 201, exam.text)
+        exam_id = exam.json()["id"]
+
+        created = self.client.post(
+            f"/api/v1/exams/{exam_id}/questions",
+            json={
+                "number": "Q1",
+                "text": "A question added through the editor.",
+                "topic": "Testing",
+                "question_type": "theory",
+                "max_marks": 4.0,
+                "answer_key": "A reference answer.",
+                "rubric": None,
+            },
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        question = created.json()
+        self.assert_has(
+            question,
+            "id", "exam_id", "number", "text", "topic", "question_type",
+            "max_marks", "answer_key", "has_rubric", "rubric", "created_at",
+        )
+        self.assertFalse(question["has_rubric"])
+
+        patched = self.client.patch(
+            f"/api/v1/questions/{question['id']}", json={"topic": "Edited"}
+        )
+        self.assertEqual(patched.status_code, 200, patched.text)
+        self.assertEqual(patched.json()["topic"], "Edited")
+
+        saved = self.client.put(
+            f"/api/v1/questions/{question['id']}/rubric",
+            json={
+                "marking_scheme": "A note for a human marker.",
+                "scoring_rules": {},
+                "criteria": [
+                    {
+                        "position": 1,
+                        "description": "The first thing being tested here",
+                        "max_marks": 2.5,
+                        "essential_concepts": ["one"],
+                        "acceptable_alternatives": ["uno"],
+                        "common_mistakes": ["zero"],
+                        "allows_partial": True,
+                        "load_bearing": True,
+                    },
+                    {
+                        "position": 2,
+                        "description": "The second thing being tested here",
+                        "max_marks": 1.5,
+                        "essential_concepts": [],
+                        "acceptable_alternatives": [],
+                        "common_mistakes": [],
+                        "allows_partial": False,
+                        "load_bearing": False,
+                    },
+                ],
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        rubric = saved.json()
+        self.assert_has(
+            rubric, "id", "version", "criteria", "total_criterion_marks",
+            "scoring_rules", "is_active", "marking_scheme",
+        )
+        self.assertEqual(rubric["total_criterion_marks"], 4.0)
+        self.assertTrue(rubric["criteria"][0]["load_bearing"])
+        self.assertFalse(rubric["criteria"][1]["allows_partial"])
+
+        versions = self.get(f"/api/v1/questions/{question['id']}/rubric/versions")
+        self.assertTrue(versions)
+        self.assert_has(
+            versions[0],
+            "id", "version", "is_active", "criteria_count",
+            "total_criterion_marks", "marking_scheme", "created_at",
+        )
+
+        key = self.client.put(
+            f"/api/v1/questions/{question['id']}/answer-key",
+            json={"reference_answer": "A revised reference answer."},
+        )
+        self.assertEqual(key.status_code, 200, key.text)
+        self.assert_has(
+            key.json(),
+            "id", "question_id", "version", "is_active", "reference_answer",
+            "created_at",
+        )
+        self.get(f"/api/v1/questions/{question['id']}/answer-key")
+
+        exported = self.get(f"/api/v1/exams/{exam_id}/export")
+        self.assertIn("questions", exported)
+        self.assertIn("exam", exported)
+
+        removed = self.client.delete(f"/api/v1/questions/{question['id']}")
+        self.assertEqual(removed.status_code, 204, removed.text)
+
     def test_roadmap_drives_the_navigation_labels(self) -> None:
         body = self.get("/api/v1/roadmap")
         self.assertEqual(len(body["parts"]), 4)

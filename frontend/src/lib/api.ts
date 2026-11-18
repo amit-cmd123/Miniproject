@@ -4,6 +4,7 @@ import type {
   Accuracy,
   Analytics,
   AnswerDetail,
+  AnswerKeyRecord,
   AnswerWithOCR,
   BookletResult,
   BookletSegmentation,
@@ -17,10 +18,14 @@ import type {
   PdfInspection,
   ProviderInfo,
   Question,
+  QuestionDraft,
+  QuestionPatch,
   Review,
   RoadmapPart,
   Rubric,
+  RubricDraft,
   RubricValidation,
+  RubricVersion,
   Thresholds,
 } from "./types";
 
@@ -172,6 +177,67 @@ export const api = {
 
   async rubric(questionId: string): Promise<Rubric> {
     return unwrap(await fetch(`${BASE}/questions/${questionId}/rubric`));
+  },
+
+  /* ---- Part 2: editing the paper ----
+   *
+   * A rubric is never mutated in place: `saveRubric` writes a new version and
+   * retires the previous one, so a score awarded last term still resolves to
+   * the rubric it was actually marked against. The same is true of answer
+   * keys. That is why these are PUTs that return a new version number rather
+   * than PATCHes.
+   */
+
+  async addQuestion(examId: string, draft: QuestionDraft): Promise<Question> {
+    return json(`/exams/${examId}/questions`, "POST", draft);
+  },
+
+  async updateQuestion(questionId: string, patch: QuestionPatch): Promise<Question> {
+    return json(`/questions/${questionId}`, "PATCH", patch);
+  },
+
+  async deleteQuestion(questionId: string): Promise<void> {
+    const response = await fetch(`${BASE}/questions/${questionId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) await unwrap(response);
+  },
+
+  /** Writes a NEW rubric version. The old one is kept, deactivated. */
+  async saveRubric(questionId: string, draft: RubricDraft): Promise<Rubric> {
+    return json(`/questions/${questionId}/rubric`, "PUT", draft);
+  },
+
+  async rubricVersions(questionId: string): Promise<RubricVersion[]> {
+    return unwrap(await fetch(`${BASE}/questions/${questionId}/rubric/versions`));
+  },
+
+  async answerKey(questionId: string): Promise<AnswerKeyRecord> {
+    return unwrap(await fetch(`${BASE}/questions/${questionId}/answer-key`));
+  },
+
+  /** Writes a NEW answer-key version. */
+  async saveAnswerKey(
+    questionId: string,
+    referenceAnswer: string,
+  ): Promise<AnswerKeyRecord> {
+    return json(`/questions/${questionId}/answer-key`, "PUT", {
+      reference_answer: referenceAnswer,
+    });
+  },
+
+  /** The paper as seed JSON, in the same shape `data/exam/seed_exam.json` uses. */
+  async exportExam(examId: string): Promise<Record<string, unknown>> {
+    return unwrap(await fetch(`${BASE}/exams/${examId}/export`));
+  },
+
+  async importExam(document: unknown): Promise<ExamDetail> {
+    return json(`/exams/import`, "POST", document);
+  },
+
+  async deleteExam(examId: string): Promise<void> {
+    const response = await fetch(`${BASE}/exams/${examId}`, { method: "DELETE" });
+    if (!response.ok) await unwrap(response);
   },
 
   /* ---- Part 3: evaluation ---- */

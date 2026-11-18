@@ -227,6 +227,63 @@ export interface RubricValidation {
   problems: RubricProblem[];
 }
 
+/* ---- Part 2: editing the paper ---- */
+
+/** A criterion as the editor holds it: no id yet, and marks may be mid-typing. */
+export interface CriterionDraft {
+  position: number;
+  description: string;
+  max_marks: number;
+  essential_concepts: string[];
+  acceptable_alternatives: string[];
+  common_mistakes: string[];
+  allows_partial: boolean;
+  load_bearing: boolean;
+}
+
+export interface RubricDraft {
+  marking_scheme?: string | null;
+  criteria: CriterionDraft[];
+  scoring_rules?: Record<string, unknown>;
+}
+
+export interface QuestionDraft {
+  number?: string | null;
+  text: string;
+  topic?: string | null;
+  question_type?: string;
+  max_marks: number;
+  answer_key?: string | null;
+  rubric?: RubricDraft | null;
+}
+
+export interface QuestionPatch {
+  number?: string | null;
+  text?: string;
+  topic?: string | null;
+  question_type?: string;
+  max_marks?: number;
+}
+
+export interface AnswerKeyRecord {
+  id: string;
+  question_id: string;
+  version: number;
+  is_active: boolean;
+  reference_answer: string;
+  created_at: string;
+}
+
+export interface RubricVersion {
+  id: string;
+  version: number;
+  is_active: boolean;
+  criteria_count: number;
+  total_criterion_marks: number;
+  marking_scheme: string | null;
+  created_at: string;
+}
+
 /* ---- Part 3: evaluation ---- */
 
 export type ReviewBand =

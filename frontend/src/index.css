@@ -104,6 +104,17 @@
   .btn-ghost {
     @apply btn border border-line bg-surface text-ink hover:bg-surface2;
   }
+  /* Text inputs, number inputs and textareas in the rubric editor. Kept in
+     one class so a field never styles itself differently from its neighbour
+     in a form an examiner is filling in. */
+  .input {
+    @apply rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink
+           placeholder:text-ink3 focus-visible:outline focus-visible:outline-2
+           focus-visible:outline-accent;
+  }
+  textarea.input {
+    @apply resize-y leading-relaxed;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

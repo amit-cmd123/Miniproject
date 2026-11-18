@@ -12,12 +12,19 @@ that has to explain exactly what leaves the machine.
 from __future__ import annotations
 
 import logging
+import random
+import re
 import time
+
+from app.providers.rate_limit import get_limiter
 
 logger = logging.getLogger(__name__)
 
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# "I am busy" rather than "I broke": another model will serve these now, so
+# they are worth switching on instead of waiting out.
+OVERLOADED_STATUS = {429, 503}
 # Key `generate` adds to a reply naming the model that served it.
 SERVED_BY = "_evalnova_served_by"
 # Two attempts per model, not more. With a model chain to fall back on, a
@@ -89,6 +96,7 @@ def generate(
                 model=candidate,
                 body=body,
                 timeout_seconds=timeout_seconds,
+                has_fallback=index < len(chain) - 1,
             )
             # Which model actually served the request. Callers record it, so a
             # result produced by a fallback is never reported as the primary's.
@@ -114,28 +122,69 @@ def generate(
     raise last_error or GeminiRequestError("No model could be reached.")
 
 
+def retry_after(message: str) -> float:
+    """Seconds Google asked us to wait, from a 429 body. 0 if it did not say."""
+    match = re.search(r"retry in ([0-9.]+)s", message, re.I)
+    if not match:
+        return 0.0
+    try:
+        return min(float(match.group(1)), 60.0)
+    except ValueError:
+        return 0.0
+
+
+def _backoff(delay: float) -> float:
+    """Spread retries that started together.
+
+    Pages and questions are now sent concurrently, so a rate limit tends to
+    hit several requests at the same instant. Without jitter they all sleep
+    the same two seconds and retry in the same instant, which reproduces the
+    burst that caused the limit.
+    """
+    return delay * random.uniform(0.6, 1.4)
+
+
 def _generate_one(
     *,
     api_key: str,
     model: str,
     body: dict,
     timeout_seconds: float,
+    has_fallback: bool = False,
 ) -> dict:
-    """POST one generateContent request, retrying transient failures."""
+    """POST one generateContent request, retrying transient failures.
+
+    When another model is available, an *overloaded* model is abandoned at
+    once rather than retried. Sleeping two seconds and then four against a
+    model that has just said it is busy costs six seconds to usually fail
+    again, when a different model is sitting there answering in one. Retrying
+    in place is still right for the last model in the chain, where waiting is
+    the only option left.
+    """
     import httpx
 
     url = f"{API_ROOT}/{model}:generateContent"
     headers = {"x-goog-api-key": api_key, "Content-Type": "application/json"}
-    delay = 2.0
 
-    for attempt in range(MAX_ATTEMPTS):
-        last = attempt == MAX_ATTEMPTS - 1
+    # Measured on this key: the preferred model answers in about 0.8s and the
+    # fallbacks in 2-9s. So an overloaded primary is worth waiting out rather
+    # than switching away from - abandoning it on the first 503 moved a whole
+    # marking run onto a model eleven times slower and made the run four
+    # times longer. Retry the fast model a few times with short, jittered
+    # backoff, and treat the chain as the last resort it is.
+    attempts, delay = (4, 0.75) if has_fallback else (3, 2.0)
+
+    limiter = get_limiter()
+
+    for attempt in range(attempts):
+        last = attempt == attempts - 1
+        limiter.acquire()
         try:
             response = httpx.post(url, json=body, headers=headers, timeout=timeout_seconds)
         except httpx.HTTPError as exc:
             if last:
                 raise GeminiRequestError(f"Could not reach Google: {exc}") from exc
-            time.sleep(delay)
+            time.sleep(_backoff(delay))
             delay *= 2
             continue
 
@@ -143,6 +192,10 @@ def _generate_one(
             return response.json()
 
         message = error_message(response)
+        if response.status_code == 429:
+            # The 429 body says how long to wait. Obeying it beats guessing,
+            # and telling the limiter stops queued callers piling on.
+            limiter.penalise(retry_after(message))
         if response.status_code in RETRYABLE_STATUS and not last:
             logger.warning(
                 "Gemini returned %s (%s); retrying in %.0fs",
@@ -150,7 +203,7 @@ def _generate_one(
                 message,
                 delay,
             )
-            time.sleep(delay)
+            time.sleep(_backoff(delay))
             delay *= 2
             continue
         raise GeminiRequestError(explain(response.status_code, message, model))

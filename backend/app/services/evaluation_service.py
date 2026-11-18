@@ -296,16 +296,41 @@ def _confidence_warnings(detail: dict, scored: list[ScoredCriterion]) -> list[st
 # ---------------------------------------------------------------------------
 
 
-def evaluate_answer(
+@dataclass
+class _Prepared:
+    """Everything needed to mark one answer, with no database left to touch.
+
+    Splitting preparation from the network call is what lets a whole booklet
+    be marked concurrently: a SQLAlchemy Session is not thread-safe, so the
+    database work happens before and after the parallel phase, never during
+    it.
+    """
+
+    answer: Answer
+    question: Question
+    ocr_result: OCRResult
+    rubric: Rubric
+    task: MarkingTask
+    student_text: str
+    transcription_confidence: float
+    human_verified: bool
+    samples: int
+    started: float
+
+
+def _prepare(
     db: Session,
     answer: Answer,
     question: Question,
     ocr_result: OCRResult,
-    provider: EvaluationProvider,
     *,
     samples: int | None = None,
-) -> Evaluation:
-    """Mark one transcribed answer against its rubric, and persist the result."""
+) -> _Prepared:
+    """Validate the rubric and the transcription, and build the request.
+
+    Raises before any network call is made, so a question that cannot be
+    marked costs nothing.
+    """
     started = time.perf_counter()
 
     rubric = rubric_service.active_rubric(db, question.id)
@@ -348,7 +373,41 @@ def evaluate_answer(
     )
 
     wanted = samples if samples is not None else settings.evaluation_samples
-    readings = read_independently(provider, task, wanted)
+    wanted = max(1, min(wanted, len(SAMPLE_TEMPERATURES)))
+
+    return _Prepared(
+        answer=answer,
+        question=question,
+        ocr_result=ocr_result,
+        rubric=rubric,
+        task=task,
+        student_text=student_text,
+        transcription_confidence=transcription_confidence,
+        human_verified=human_verified,
+        samples=wanted,
+        started=started,
+    )
+
+
+def _persist(
+    db: Session,
+    prep: _Prepared,
+    readings: list[MarkingJudgement],
+    provider: EvaluationProvider,
+) -> Evaluation:
+    """Turn finished readings into marks and rows. No network."""
+    answer = prep.answer
+    question = prep.question
+    rubric = prep.rubric
+    ocr_result = prep.ocr_result
+    student_text = prep.student_text
+    human_verified = prep.human_verified
+    transcription_confidence = prep.transcription_confidence
+    started = prep.started
+
+    if not readings:
+        raise EvaluationError("No reading could be completed.")
+
     agreed = scoring.consensus(readings)
 
     score, scored = score_judgement(agreed.judgement, rubric, question, student_text)
@@ -425,6 +484,81 @@ def evaluate_answer(
         },
     )
     return record
+
+
+def evaluate_answer(
+    db: Session,
+    answer: Answer,
+    question: Question,
+    ocr_result: OCRResult,
+    provider: EvaluationProvider,
+    *,
+    samples: int | None = None,
+) -> Evaluation:
+    """Mark one transcribed answer against its rubric, and persist the result."""
+    prep = _prepare(db, answer, question, ocr_result, samples=samples)
+    readings = read_independently(provider, prep.task, prep.samples)
+    return _persist(db, prep, readings, provider)
+
+
+def read_many(
+    provider: EvaluationProvider,
+    preps: list[_Prepared],
+    *,
+    max_workers: int | None = None,
+) -> tuple[dict[int, list[MarkingJudgement]], dict[int, str]]:
+    """Take every reading for every answer in one bounded pool.
+
+    Marking a booklet one question at a time spent almost all of its wall
+    clock waiting on Google in series. Every (answer, reading) pair is an
+    independent request, so they go into a single pool instead: the model
+    sees exactly the same bytes, so the marks are unchanged, and a six
+    question script finishes in about the time one question used to take.
+
+    The pool is bounded rather than unbounded because the free tier answers a
+    burst of a dozen simultaneous requests with 429, and a rate limit is
+    slower than a queue.
+
+    Returns the readings per answer index, and a message per answer index
+    that produced none - a question whose network calls all failed is
+    reported, never silently scored from nothing.
+    """
+    jobs: list[tuple[int, float]] = [
+        (index, SAMPLE_TEMPERATURES[sample])
+        for index, prep in enumerate(preps)
+        for sample in range(prep.samples)
+    ]
+    if not jobs:
+        return {}, {}
+
+    cap = max_workers or settings.evaluation_max_concurrency
+    workers = max(1, min(cap, len(jobs)))
+
+    readings: dict[int, list[MarkingJudgement]] = {i: [] for i in range(len(preps))}
+    failures: dict[int, str] = {}
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(provider.judge, preps[index].task, temperature=temperature): index
+            for index, temperature in jobs
+        }
+        for future in futures:
+            index = futures[future]
+            try:
+                readings[index].append(future.result())
+            except Exception as exc:  # provider-specific; reported, not raised
+                logger.warning(
+                    "A reading of %s failed: %s",
+                    preps[index].question.number or preps[index].question.id[:8],
+                    exc,
+                )
+                failures.setdefault(index, str(exc))
+
+    for index, got in readings.items():
+        if got:
+            failures.pop(index, None)
+
+    return readings, failures
 
 
 def latest_evaluation(db: Session, answer_id: str) -> Evaluation | None:
@@ -713,6 +847,12 @@ def evaluate_booklet(
 
     evaluations: list[Evaluation] = []
 
+    # Phase 1 - database only. Derive the per-question answer rows and
+    # validate every rubric before a single request is sent, so a paper with
+    # a broken rubric costs nothing.
+    preps: list[_Prepared] = []
+    labels: list[str] = []
+
     for segment in segments:
         label = segment.question.number or segment.question.id[:8]
 
@@ -723,15 +863,31 @@ def evaluate_booklet(
             )
             continue
 
-        answer, record = derived_answer_for(
-            db, segment, pages, document_ref, booklet_ref
-        )
         try:
-            evaluations.append(
-                evaluate_answer(
-                    db, answer, segment.question, record, provider, samples=samples
-                )
+            answer, record = derived_answer_for(
+                db, segment, pages, document_ref, booklet_ref
             )
+            preps.append(
+                _prepare(db, answer, segment.question, record, samples=samples)
+            )
+            labels.append(label)
+        except EvaluationError as exc:
+            db.rollback()
+            logger.warning("Marking %s failed: %s", label, exc)
+            warnings.append(f"{label} could not be marked: {exc}")
+
+    # Phase 2 - network only, all questions and all readings at once.
+    readings, failures = read_many(provider, preps)
+
+    # Phase 3 - database only. Marks are computed here, in Python, exactly as
+    # they were when this ran in series.
+    for index, prep in enumerate(preps):
+        label = labels[index]
+        if index in failures:
+            warnings.append(f"{label} could not be marked: {failures[index]}")
+            continue
+        try:
+            evaluations.append(_persist(db, prep, readings.get(index, []), provider))
         except EvaluationError as exc:
             db.rollback()
             logger.warning("Marking %s failed: %s", label, exc)

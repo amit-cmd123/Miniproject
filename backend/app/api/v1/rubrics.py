@@ -12,14 +12,19 @@ from app.core.config import REPO_ROOT
 from app.db.models import Exam, Question, Rubric
 from app.db.session import get_db
 from app.schemas.rubrics import (
+    AnswerKeyIn,
+    AnswerKeyOut,
     CriterionOut,
     ExamDetailOut,
     ExamIn,
     ExamOut,
+    QuestionIn,
     QuestionOut,
+    QuestionPatch,
     RubricIn,
     RubricOut,
     RubricValidationOut,
+    RubricVersionOut,
 )
 from app.services import rubric_service
 from app.services.rubric_service import RubricError
@@ -250,3 +255,203 @@ def replace_rubric(
         )
 
     return _rubric_out(rubric_service.replace_rubric(db, question, payload))
+
+
+# ---------------------------------------------------------------------------
+# Editing the paper
+#
+# Everything below changes institution-owned truth, so each route is explicit
+# about what it keeps: a rubric is replaced by version and never mutated, an
+# answer key the same, and a question that has been marked against cannot be
+# deleted at all.
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/exams/{exam_id}/questions",
+    response_model=QuestionOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_question(
+    exam_id: str, payload: QuestionIn, db: Session = Depends(get_db)
+) -> QuestionOut:
+    """Add a question, optionally with its answer key and rubric."""
+    exam = _get_exam(db, exam_id)
+
+    if payload.rubric:
+        total = round(sum(c.max_marks for c in payload.rubric.criteria), 4)
+        if abs(total - payload.max_marks) > rubric_service.MARK_TOLERANCE:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"The criteria sum to {total:g} but the question is worth "
+                f"{payload.max_marks:g}. A rubric that does not sum caps every "
+                f"student silently, so it is refused here.",
+            )
+        positions = [c.position for c in payload.rubric.criteria]
+        if len(set(positions)) != len(positions):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "Two criteria share the same position."
+            )
+
+    if payload.number:
+        existing = {q.number for q in rubric_service.questions_for(db, exam.id)}
+        if payload.number in existing:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"This paper already has a question numbered {payload.number}. "
+                f"Booklet splitting matches on that number, so they must be "
+                f"unique.",
+            )
+
+    try:
+        question = rubric_service.add_question(db, exam, payload)
+    except RubricError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _question_out(db, question)
+
+
+@router.patch("/questions/{question_id}", response_model=QuestionOut)
+def update_question(
+    question_id: str, payload: QuestionPatch, db: Session = Depends(get_db)
+) -> QuestionOut:
+    """Edit a question's wording, topic, type or marks.
+
+    Changing `max_marks` does not rescale the rubric. If the two no longer
+    agree, validation says so and marking refuses - which is intended, because
+    deciding what each criterion is now worth is an examiner's judgement, not
+    an arithmetic convenience.
+    """
+    question = _get_question(db, question_id)
+
+    if payload.number and payload.number != question.number:
+        clash = [
+            q
+            for q in rubric_service.questions_for(db, question.exam_id)
+            if q.number == payload.number and q.id != question.id
+        ]
+        if clash:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Another question on this paper is already numbered "
+                f"{payload.number}.",
+            )
+
+    try:
+        question = rubric_service.update_question(db, question, payload)
+    except RubricError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return _question_out(db, question)
+
+
+@router.delete("/questions/{question_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_question(question_id: str, db: Session = Depends(get_db)) -> None:
+    """Delete a question. Refused once anything has been marked against it."""
+    question = _get_question(db, question_id)
+    try:
+        rubric_service.delete_question(db, question)
+    except RubricError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+@router.get("/questions/{question_id}/answer-key", response_model=AnswerKeyOut)
+def get_answer_key(question_id: str, db: Session = Depends(get_db)) -> AnswerKeyOut:
+    question = _get_question(db, question_id)
+    key = rubric_service.active_answer_key(db, question.id)
+    if key is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "This question has no answer key yet."
+        )
+    return AnswerKeyOut.model_validate(key)
+
+
+@router.put("/questions/{question_id}/answer-key", response_model=AnswerKeyOut)
+def set_answer_key(
+    question_id: str, payload: AnswerKeyIn, db: Session = Depends(get_db)
+) -> AnswerKeyOut:
+    """Write a new answer-key version. The previous one is kept, deactivated.
+
+    The key is shown to the marker as a reference answer, not as text to
+    match: it describes what a good answer contains, and a student who says
+    the same thing differently still scores.
+    """
+    question = _get_question(db, question_id)
+    key = rubric_service.set_answer_key(db, question, payload.reference_answer)
+    return AnswerKeyOut.model_validate(key)
+
+
+@router.get(
+    "/questions/{question_id}/rubric/versions", response_model=list[RubricVersionOut]
+)
+def rubric_versions(
+    question_id: str, db: Session = Depends(get_db)
+) -> list[RubricVersionOut]:
+    """Every rubric ever written for this question, newest first.
+
+    Kept because evaluations cite a version number: without this, a score
+    marked under version 2 of a rubric now on version 5 cannot be explained
+    to the student it belongs to.
+    """
+    question = _get_question(db, question_id)
+    return [
+        RubricVersionOut(
+            id=rubric.id,
+            version=rubric.version,
+            is_active=rubric.is_active,
+            criteria_count=len(rubric.criteria),
+            total_criterion_marks=rubric_service.total_criterion_marks(rubric),
+            marking_scheme=rubric.marking_scheme,
+            created_at=rubric.created_at,
+        )
+        for rubric in rubric_service.rubric_versions(db, question.id)
+    ]
+
+
+@router.get("/exams/{exam_id}/export")
+def export_exam(exam_id: str, db: Session = Depends(get_db)) -> dict:
+    """The whole paper as seed JSON, ready to commit to the repository.
+
+    Round-trips with the import below, so a paper edited in the interface can
+    be reviewed in a diff and seeded on another machine. A marking scheme
+    that lives only in one laptop's database is not institution-owned.
+    """
+    exam = _get_exam(db, exam_id)
+    return rubric_service.exam_to_seed(db, exam)
+
+
+@router.post(
+    "/exams/import", response_model=ExamDetailOut, status_code=status.HTTP_201_CREATED
+)
+def import_exam(payload: dict, db: Session = Depends(get_db)) -> ExamDetailOut:
+    """Create a paper from seed JSON of the same shape `export` produces."""
+    try:
+        exam_in = rubric_service.exam_from_seed(payload)
+    except RubricError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # malformed JSON shape
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"That does not look like an exam definition: {exc}",
+        ) from exc
+
+    try:
+        exam = rubric_service.create_exam(db, exam_in)
+    except RubricError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    return ExamDetailOut(
+        **_exam_out(db, exam).model_dump(),
+        questions=[
+            _question_out(db, question)
+            for question in rubric_service.questions_for(db, exam.id)
+        ],
+    )
+
+
+@router.delete("/exams/{exam_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_exam(exam_id: str, db: Session = Depends(get_db)) -> None:
+    """Delete a whole paper. Refused once anything has been marked against it."""
+    exam = _get_exam(db, exam_id)
+    try:
+        rubric_service.delete_exam(db, exam)
+    except RubricError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
