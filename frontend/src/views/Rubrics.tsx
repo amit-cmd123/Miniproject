@@ -36,6 +36,7 @@ export function Rubrics() {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [newPaper, setNewPaper] = useState(false);
 
   /**
    * `wanted` names the paper to show. Importing creates additional papers and
@@ -216,6 +217,13 @@ export function Rubrics() {
             />
 
             <div className="ml-auto flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-ghost text-sm"
+                onClick={() => setNewPaper(true)}
+              >
+                New paper
+              </button>
               <button type="button" className="btn-ghost text-sm" onClick={exportPaper}>
                 Export JSON
               </button>
@@ -243,6 +251,20 @@ export function Rubrics() {
               )}
             </div>
           </section>
+
+          {newPaper && (
+            <NewPaper
+              onDone={(id) => {
+                setNewPaper(false);
+                setNotice(
+                  "Paper created. Add its questions below, then open each one " +
+                    "and choose Edit rubric.",
+                );
+                void load(null, id);
+              }}
+              onCancel={() => setNewPaper(false)}
+            />
+          )}
 
           {validation && <ValidationBanner validation={validation} />}
 
@@ -742,6 +764,117 @@ function AnswerKeyField({
         </span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Starting a new paper.
+ *
+ * Here so that a whole exam can be built without touching a file. Export and
+ * Import exist for backup and for moving a finished paper between machines -
+ * they are not meant to be the way a marking scheme gets written, and if
+ * hand-editing JSON were the only route in then the rubric would not really
+ * be owned by the examiner at all.
+ */
+function NewPaper({
+  onDone,
+  onCancel,
+}: {
+  onDone: (examId: string) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [subject, setSubject] = useState("");
+  const [code, setCode] = useState("");
+  const [term, setTerm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function create() {
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api.createExam({
+        title: title.trim(),
+        subject: subject.trim(),
+        subject_code: code.trim() || null,
+        term: term.trim() || null,
+      });
+      onDone(created.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not create the paper.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card flex flex-col gap-3 p-4">
+      <p className="eyebrow">New paper</p>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Title">
+          <input
+            className="input w-full"
+            value={title}
+            placeholder="Data Structures — Mid-term"
+            onChange={(e) => setTitle(e.target.value)}
+          />
+        </Field>
+        <Field label="Subject">
+          <input
+            className="input w-full"
+            value={subject}
+            placeholder="Computer Science"
+            onChange={(e) => setSubject(e.target.value)}
+          />
+        </Field>
+        <Field
+          label="Subject code"
+          hint="Optional, but it must be unique — seeding and import match on it."
+        >
+          <input
+            className="input w-full font-mono"
+            value={code}
+            placeholder="EVN-DS-02"
+            onChange={(e) => setCode(e.target.value)}
+          />
+        </Field>
+        <Field label="Term (optional)">
+          <input
+            className="input w-full"
+            value={term}
+            placeholder="2026 Odd Semester"
+            onChange={(e) => setTerm(e.target.value)}
+          />
+        </Field>
+      </div>
+
+      <p className="text-sm text-ink3">
+        The paper starts empty. Add each question, then open it and choose{" "}
+        <strong>Edit rubric</strong> to write the criteria. No files involved.
+      </p>
+
+      {error && (
+        <p className="rounded-md border border-band4 bg-surface px-3 py-2 text-sm text-band4">
+          {error}
+        </p>
+      )}
+
+      <div className="flex gap-3">
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={create}
+          disabled={busy || title.trim().length < 3 || subject.trim().length < 2}
+        >
+          {busy ? "Creating…" : "Create paper"}
+        </button>
+        <button type="button" className="btn-ghost" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </section>
   );
 }
 

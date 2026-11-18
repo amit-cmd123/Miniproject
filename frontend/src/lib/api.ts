@@ -159,6 +159,16 @@ export const api = {
     return unwrap(await fetch(`${BASE}/exams/${id}`));
   },
 
+  /** Start an empty paper. Questions and rubrics are added to it afterwards. */
+  async createExam(payload: {
+    title: string;
+    subject: string;
+    subject_code?: string | null;
+    term?: string | null;
+  }): Promise<ExamDetail> {
+    return json(`/exams`, "POST", { ...payload, questions: [] });
+  },
+
   /** Load the bundled paper. Idempotent, so it is safe to call on open. */
   async seedExam(replace = false): Promise<ExamDetail> {
     return unwrap(
