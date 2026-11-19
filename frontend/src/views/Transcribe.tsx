@@ -4,9 +4,20 @@ import type {
   Accuracy,
   AnswerWithOCR,
   DocumentTranscription,
+  Evaluation,
   PdfInspection,
+  Question,
 } from "../lib/types";
 import { BandChip, ConfidenceBar, LineConfidence } from "../components/Confidence";
+import { EngineToggle } from "../components/EngineToggle";
+import {
+  ConfidenceMeter,
+  CriterionBreakdown,
+  ReviewBandChip,
+  ScoreBadge,
+  WarningList,
+} from "../components/Marks";
+import type { EngineState } from "../lib/engine";
 import { DocumentResult } from "./DocumentResult";
 
 type Phase = "idle" | "confirming" | "working" | "done" | "error";
@@ -14,7 +25,13 @@ type Phase = "idle" | "confirming" | "working" | "done" | "error";
 const isPdf = (file: File) =>
   file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 
-export function Transcribe({ onSaved }: { onSaved: () => void }) {
+export function Transcribe({
+  onSaved,
+  engine,
+}: {
+  onSaved: () => void;
+  engine: EngineState;
+}) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [result, setResult] = useState<AnswerWithOCR | null>(null);
   const [docResult, setDocResult] = useState<DocumentTranscription | null>(null);
@@ -53,7 +70,7 @@ export function Transcribe({ onSaved }: { onSaved: () => void }) {
     if (isPdf(file)) {
       setPhase("working");
       try {
-        const info = await api.inspectPdf(file);
+        const info = await api.inspectPdf(file, engine.engine);
         setPending({ file, info });
         setPageRange(info.total_pages > 4 ? `1-${Math.min(4, info.total_pages)}` : "");
         setPhase("confirming");
@@ -71,7 +88,7 @@ export function Transcribe({ onSaved }: { onSaved: () => void }) {
       return URL.createObjectURL(file);
     });
     try {
-      setResult(await api.uploadAndTranscribe(file));
+      setResult(await api.uploadAndTranscribe(file, engine.engine));
       setPhase("done");
       onSaved();
     } catch (err) {
@@ -82,7 +99,7 @@ export function Transcribe({ onSaved }: { onSaved: () => void }) {
       );
       setPhase("error");
     }
-  }, [onSaved]);
+  }, [onSaved, engine.engine]);
 
   const runDocument = useCallback(async () => {
     if (!pending) return;
@@ -90,14 +107,16 @@ export function Transcribe({ onSaved }: { onSaved: () => void }) {
     setElapsed(0);
     setPreview(null);
     try {
-      setDocResult(await api.transcribeDocument(pending.file, pageRange));
+      setDocResult(
+        await api.transcribeDocument(pending.file, pageRange, engine.engine),
+      );
       setPhase("done");
       onSaved();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not read that PDF.");
       setPhase("error");
     }
-  }, [pending, pageRange, onSaved]);
+  }, [pending, pageRange, onSaved, engine.engine]);
 
   const run = accept;
 
@@ -121,6 +140,8 @@ export function Transcribe({ onSaved }: { onSaved: () => void }) {
           </button>
         )}
       </header>
+
+      <EngineToggle state={engine} />
 
       {phase === "idle" && (
         <DropZone
@@ -149,7 +170,7 @@ export function Transcribe({ onSaved }: { onSaved: () => void }) {
         <ErrorState message={error!} onRetry={() => { setPhase("idle"); setError(null); }} />
       )}
 
-      {phase === "done" && result && <Result result={result} />}
+      {phase === "done" && result && <Result result={result} engine={engine} />}
       {phase === "done" && docResult && <DocumentResult doc={docResult} />}
     </div>
   );
@@ -358,7 +379,13 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
 
 /* ------------------------------------------------------------------ */
 
-function Result({ result }: { result: AnswerWithOCR }) {
+function Result({
+  result,
+  engine,
+}: {
+  result: AnswerWithOCR;
+  engine: EngineState;
+}) {
   const { answer, ocr } = result;
   const [tab, setTab] = useState<"original" | "segmentation">("original");
   const [text, setText] = useState(ocr.effective_text);
@@ -413,6 +440,8 @@ function Result({ result }: { result: AnswerWithOCR }) {
           <ConfidenceBar value={ocr.confidence} band={ocr.transcription_band} />
         </div>
       </div>
+
+      <MarkThisAnswer answerId={answer.id} engine={engine} />
 
       {ocr.warnings.length > 0 && (
         <ul className="flex flex-col gap-2">
@@ -638,6 +667,161 @@ function PreprocessingPanel({ ocr }: { ocr: AnswerWithOCR["ocr"] }) {
         </div>
       ) : (
         <p className="p-4 text-sm text-ink3">No preprocessing detail recorded.</p>
+      )}
+    </section>
+  );
+}
+
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * Mark one answer, here, against a question the examiner picks.
+ *
+ * The booklet route infers which question each page answers from the page's
+ * own content. A single uploaded image has no booklet to infer from, so the
+ * question is asked for outright rather than guessed - marking an answer
+ * against the wrong rubric produces a plausible score for the wrong question,
+ * which is worse than refusing to mark it.
+ */
+function MarkThisAnswer({
+  answerId,
+  engine,
+}: {
+  answerId: string;
+  engine: EngineState;
+}) {
+  const [questions, setQuestions] = useState<Question[] | null>(null);
+  const [chosen, setChosen] = useState<string>("");
+  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await api.questions();
+        if (cancelled) return;
+        setQuestions(list);
+        // Only preselect when there is no ambiguity to resolve.
+        if (list.length === 1) setChosen(list[0].id);
+      } catch {
+        if (!cancelled) setQuestions([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function mark() {
+    if (!chosen) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setEvaluation(await api.evaluate(answerId, chosen, undefined, engine.engine));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Marking failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (questions !== null && questions.length === 0) {
+    return (
+      <section className="card p-4 text-sm text-ink2">
+        No questions are defined yet, so there is nothing to mark this against.
+        Add a paper under <span className="font-semibold">Questions &amp; rubrics</span>{" "}
+        first.
+      </section>
+    );
+  }
+
+  return (
+    <section className={`card p-5 ${busy ? "scanning" : ""}`}>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="eyebrow">Mark this answer</p>
+          <p className="mt-1 text-sm text-ink2">
+            Pick the question this page answers. It is marked criterion by
+            criterion against that question&rsquo;s active rubric, by the engine
+            selected above.
+          </p>
+        </div>
+
+        <label className="flex min-w-[260px] flex-col gap-1">
+          <span className="eyebrow">Question</span>
+          <select
+            className="input"
+            value={chosen}
+            onChange={(e) => {
+              setChosen(e.target.value);
+              setEvaluation(null);
+            }}
+            disabled={!questions || busy}
+          >
+            <option value="">
+              {questions ? "Choose a question\u2026" : "Loading\u2026"}
+            </option>
+            {(questions ?? []).map((question) => (
+              <option key={question.id} value={question.id}>
+                {question.number ? `${question.number} · ` : ""}
+                {question.text.slice(0, 60)}
+                {question.text.length > 60 ? "\u2026" : ""} ({question.max_marks})
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button className="btn-primary" disabled={!chosen || busy} onClick={() => void mark()}>
+          {busy ? "Marking\u2026" : "Mark"}
+        </button>
+      </div>
+
+      {error && (
+        <p className="mt-3 rounded-md border-l-[3px] border-band4 bg-surface px-4 py-2.5 text-sm text-band4">
+          {error}
+        </p>
+      )}
+
+      {evaluation && (
+        <div className="mt-5 flex flex-col gap-4 border-t border-line pt-5">
+          <div className="flex flex-wrap items-center gap-4">
+            <ScoreBadge
+              score={evaluation.score}
+              max={evaluation.max_score}
+              band={evaluation.review_band}
+            />
+            <ReviewBandChip
+              band={evaluation.review_band}
+              label={evaluation.band_label}
+            />
+            <span className="font-mono text-xs text-ink3">
+              {evaluation.provider} · {evaluation.model_name} · rubric v
+              {evaluation.rubric_version}
+            </span>
+          </div>
+
+          <ConfidenceMeter
+            value={evaluation.confidence}
+            band={evaluation.review_band}
+          />
+
+          {evaluation.overall_explanation && (
+            <p className="text-sm text-ink2">{evaluation.overall_explanation}</p>
+          )}
+
+          <CriterionBreakdown criteria={evaluation.criteria} />
+          <WarningList warnings={evaluation.warnings} />
+
+          <p className="text-xs text-ink3">
+            The marks were computed in Python from these verdicts &mdash; the
+            model never sees a mark value and never adds anything up, so the
+            same verdicts always give the same score. Confirm or change it under{" "}
+            <span className="font-semibold">Examiner review</span>.
+          </p>
+        </div>
       )}
     </section>
   );

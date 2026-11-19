@@ -10,11 +10,14 @@ import type {
   BookletSegmentation,
   ConfidenceWeights,
   DocumentTranscription,
+  Engine,
+  Engines,
   Evaluation,
   EvaluatorInfo,
   Exam,
   ExamDetail,
   OCRResult,
+  ParsedPaper,
   PdfInspection,
   ProviderInfo,
   Question,
@@ -30,6 +33,17 @@ import type {
 } from "./types";
 
 const BASE = "/api/v1";
+
+/** `?engine=` for the calls that can run on either engine.
+ *
+ * Omitted entirely when no engine is given, so the backend applies whatever
+ * the .env file configures rather than the interface quietly deciding.
+ */
+function withEngine(path: string, engine?: Engine): string {
+  if (!engine) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}engine=${engine}`;
+}
 
 /** An API failure carrying a message worth showing a user. */
 export class ApiError extends Error {
@@ -72,8 +86,13 @@ async function unwrap<T>(response: Response): Promise<T> {
 }
 
 export const api = {
-  async providerInfo(): Promise<ProviderInfo> {
-    return unwrap(await fetch(`${BASE}/ocr/provider`));
+  async providerInfo(engine?: Engine): Promise<ProviderInfo> {
+    return unwrap(await fetch(`${BASE}${withEngine("/ocr/provider", engine)}`));
+  },
+
+  /** Which engines exist here, and whether each can run right now. */
+  async engines(): Promise<Engines> {
+    return unwrap(await fetch(`${BASE}/engines`));
   },
 
   async thresholds(): Promise<Thresholds> {
@@ -84,32 +103,42 @@ export const api = {
     return unwrap(await fetch(`${BASE}/roadmap`));
   },
 
-  async uploadAndTranscribe(file: File): Promise<AnswerWithOCR> {
+  async uploadAndTranscribe(file: File, engine?: Engine): Promise<AnswerWithOCR> {
     const form = new FormData();
     form.append("file", file);
     return unwrap(
-      await fetch(`${BASE}/answers/transcribe`, { method: "POST", body: form }),
+      await fetch(`${BASE}${withEngine("/answers/transcribe", engine)}`, {
+        method: "POST",
+        body: form,
+      }),
     );
   },
 
   /** How many pages, and roughly how long will reading them take? */
-  async inspectPdf(file: File): Promise<PdfInspection> {
+  async inspectPdf(file: File, engine?: Engine): Promise<PdfInspection> {
     const form = new FormData();
     form.append("file", file);
     return unwrap(
-      await fetch(`${BASE}/documents/inspect`, { method: "POST", body: form }),
+      await fetch(`${BASE}${withEngine("/documents/inspect", engine)}`, {
+        method: "POST",
+        body: form,
+      }),
     );
   },
 
   async transcribeDocument(
     file: File,
     pages?: string,
+    engine?: Engine,
   ): Promise<DocumentTranscription> {
     const form = new FormData();
     form.append("file", file);
     if (pages?.trim()) form.append("pages", pages.trim());
     return unwrap(
-      await fetch(`${BASE}/documents/transcribe`, { method: "POST", body: form }),
+      await fetch(`${BASE}${withEngine("/documents/transcribe", engine)}`, {
+        method: "POST",
+        body: form,
+      }),
     );
   },
 
@@ -245,6 +274,23 @@ export const api = {
     return json(`/exams/import`, "POST", document);
   },
 
+  /** Read a typed question paper (.docx / .pdf / .txt) and propose a paper.
+   *
+   * Nothing is saved by this call. What comes back is a proposal shown to the
+   * examiner, who edits it and then commits it through `importExam` - the
+   * same door a hand-written paper goes through.
+   */
+  async parseDocument(file: File, engine?: Engine): Promise<ParsedPaper> {
+    const form = new FormData();
+    form.append("file", file);
+    return unwrap(
+      await fetch(`${BASE}${withEngine("/exams/parse-document", engine)}`, {
+        method: "POST",
+        body: form,
+      }),
+    );
+  },
+
   async deleteExam(examId: string): Promise<void> {
     const response = await fetch(`${BASE}/exams/${examId}`, { method: "DELETE" });
     if (!response.ok) await unwrap(response);
@@ -252,16 +298,23 @@ export const api = {
 
   /* ---- Part 3: evaluation ---- */
 
-  async evaluatorInfo(): Promise<EvaluatorInfo> {
-    return unwrap(await fetch(`${BASE}/evaluations/provider`));
+  async evaluatorInfo(engine?: Engine): Promise<EvaluatorInfo> {
+    return unwrap(
+      await fetch(`${BASE}${withEngine("/evaluations/provider", engine)}`),
+    );
   },
 
   async confidenceWeights(): Promise<ConfidenceWeights> {
     return unwrap(await fetch(`${BASE}/config/confidence-weights`));
   },
 
-  async evaluate(answerId: string, questionId?: string, samples?: number): Promise<Evaluation> {
-    return json("/evaluations", "POST", {
+  async evaluate(
+    answerId: string,
+    questionId?: string,
+    samples?: number,
+    engine?: Engine,
+  ): Promise<Evaluation> {
+    return json(withEngine("/evaluations", engine), "POST", {
       answer_id: answerId,
       question_id: questionId,
       samples,
@@ -295,9 +348,14 @@ export const api = {
 
   async evaluateBooklet(
     documentRef: string,
-    options: { examId?: string; bookletRef?: string; samples?: number } = {},
+    options: {
+      examId?: string;
+      bookletRef?: string;
+      samples?: number;
+      engine?: Engine;
+    } = {},
   ): Promise<BookletResult> {
-    return json("/documents/evaluate", "POST", {
+    return json(withEngine("/documents/evaluate", options.engine), "POST", {
       document_ref: documentRef,
       exam_id: options.examId,
       booklet_ref: options.bookletRef,

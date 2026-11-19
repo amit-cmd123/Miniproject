@@ -58,6 +58,40 @@ Say why it is there:
 That one sentence usually earns more credit than anything else on the screen,
 because it is a failure the audience can immediately imagine shipping.
 
+### 1b · Import a marking scheme from Word — *"where does a rubric come from?"*
+
+Nobody writes a marking scheme as JSON. They write it in Word, as a table. So
+the importer reads one.
+
+Still on **Questions & rubrics**, press **Import Word / PDF** and choose
+`data/exam/sample_rubric.docx` — a three-question Data Structures paper with
+its criteria in bordered tables, the shape a department actually produces.
+
+A preview appears. Say what it is:
+
+> Nothing has been saved yet. It has read three questions, thirteen criteria
+> and three answer keys out of the Word file, and it is showing me what it
+> thinks the document said so I can refuse it. A marking scheme decides a
+> grade — it does not get into the system on a parser's say-so.
+
+Point at the green `criteria sum to 6` beside each question, then press
+**Create this paper**. It appears in the picker, already valid.
+
+**The second half of this, if there is time.** Press **Import Word / PDF**
+again with `data/exam/EVN-PROG-01_Answer_Key.docx` — our own answer key, a far
+messier document. With the engine switch set to **Local**, the built-in parser
+struggles: it reports criteria that do not sum and lines it could not place.
+Flip the switch to **Gemini** and import the same file: six questions, every
+rubric summing, topics filled in.
+
+That contrast is worth showing deliberately rather than hiding:
+
+> Both engines read the same file. The regular-expression parser cannot invent
+> a criterion, so when the layout defeats it, it says so instead of guessing.
+> The language model handles the messy layout — and because it *can*
+> paraphrase, everything it produces is a proposal I have to approve. The
+> honest version of this feature is the preview screen, not the parser.
+
 ### 2 · Transcribe — *"what did the student write?"*
 
 Upload `data/exam/scans/writer_1.pdf`. It quotes the expected wait before
@@ -196,6 +230,56 @@ Nothing in that table needs hiding. A demo where the failure modes are
 explainable is stronger than one where everything happens to work.
 
 ---
+
+## The engine switch — showing that we built the thing, not just called an API
+
+The **Gemini** toggle sits on both the Transcribe and the Evaluation screen. It
+changes which engine the *next* request uses; nothing restarts.
+
+| | Gemini **on** | Gemini **off** |
+|---|---|---|
+| Reads handwriting | Google's vision model | **TrOCR**, on this machine's CPU |
+| Awards the marks | Google's model, rubric by rubric | **Rubric concept matcher**, criterion by criterion |
+| Leaves the machine | page images and transcribed text | nothing |
+
+### What to say while flipping it
+
+Upload `data/exam/pages/writer_1_p1.png` with the switch **off**, then the same
+page with it **on**. Measured on that page:
+
+| | Local engine | Gemini |
+|---|---|---|
+| Time | ~30 s | ~11 s |
+| Confidence | 0.73 — *verify* | 0.998 — *reliable* |
+| Output | words recognisable, punctuation noisy | clean |
+
+Do not apologise for the first column. It is the point:
+
+> That is our own pipeline, start to finish, with nothing leaving this laptop:
+> OpenCV deskews the page and cuts it into lines, and a TrOCR model reads each
+> line and tells us how certain its decoder was, token by token. It works. It
+> is also slower and noisier than a model trained on far more data than we can
+> get, which is why the cloud model is the engine of record at 2.9% character
+> error rate — and why the system records *which* engine produced every single
+> transcription and every single mark.
+
+### The one thing to be straight about
+
+With the switch off, marking runs on the concept matcher, not on a language
+model. It walks the same rubric and awards the same partial credit, but it
+decides by concept overlap rather than by reading. Every score it produces
+carries the warning, and the interface prints it:
+
+> *Marked by the keyword baseline, not a language model. These verdicts are a
+> floor to compare against, not a result to report.*
+
+If an evaluator asks whether that counts as "our model marking the paper", the
+answer is no, and saying so is worth more than the claim would be:
+
+> The handwriting model is ours and it is doing real work. The offline marker
+> is a baseline — it is what we measure the language model against, so that
+> "the model is better" is a number rather than an opinion.
+
 
 ## Speed, and the thing that actually limits it
 

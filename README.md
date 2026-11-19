@@ -152,6 +152,36 @@ the local engine instead and the result carries a warning saying so. On
 Google's free tier, submitted content may be used to improve Google's
 products — weigh that before sending real students' answer sheets.
 
+### Switching engine per request
+
+`EVALNOVA_OCR_PROVIDER` sets the default. It is not the only way to choose:
+every endpoint that reads handwriting or awards a mark accepts `?engine=`, and
+the interface has a Gemini switch on the Transcribe and Evaluation screens
+that sends it.
+
+```
+?engine=gemini   Google's model
+?engine=local    TrOCR for reading, the rubric concept matcher for marking
+?engine=auto     whatever .env configures (the default when omitted)
+```
+
+`GET /api/v1/engines` reports which are available, so the switch can be shown
+as disabled with a reason rather than failing when it is flipped.
+
+One rule makes this safe to rely on: **an explicitly requested engine is never
+substituted.** Asking for `gemini` with no key configured returns 503 with the
+reason; it does not quietly read the page with TrOCR. The provider's name is
+written onto every stored transcription and every stored score, so a silent
+substitution would make the record claim something that did not happen. The
+*configured default* still falls back, because that is a deployment preference
+rather than somebody's stated intent.
+
+With the switch off, marking runs on the concept matcher in
+`providers/evaluation/mock_evaluator.py` — it walks the same criteria and
+awards the same partial credit, but decides by concept overlap rather than by
+reading. Every score it produces is flagged `is_mock` and carries a warning
+saying it is a baseline, not a result to report.
+
 ## Running
 
 Two terminals:
@@ -282,10 +312,18 @@ Implemented:
 | `PATCH` | `/api/v1/answers/{id}/ocr/verify` | Save a human correction |
 | `POST` | `/api/v1/answers/{id}/ocr/accuracy` | Character and word error rate |
 | `GET` | `/api/v1/ocr/provider` | Which engine is loaded, and is it ready |
+| `GET` | `/api/v1/engines` | Both engines, and whether each can run now |
 | `GET` | `/api/v1/config/thresholds` | The trust bands |
 | `GET` | `/api/v1/roadmap` | What is built, and what is proven |
 
 **Part 2 — questions and rubrics**
+
+A paper can be typed in by hand, imported as seed JSON, or read out
+of the Word or PDF file it already exists in — `POST /api/v1/exams/parse-document`
+returns a *proposal* and saves nothing; the examiner approves it and it
+goes in through `POST /api/v1/exams/import` like any other paper.
+`scripts/make_sample_rubric.py` writes `data/exam/sample_rubric.docx` to
+try it against.
 
 | Method | Endpoint | Purpose |
 |---|---|---|

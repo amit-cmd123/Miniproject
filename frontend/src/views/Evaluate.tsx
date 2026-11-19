@@ -18,6 +18,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import { EngineToggle } from "../components/EngineToggle";
+import type { EngineState } from "../lib/engine";
 import type {
   AnswerDetail,
   BookletResult,
@@ -43,7 +45,13 @@ interface Booklet {
 
 type Phase = "choosing" | "previewing" | "marking" | "done" | "error";
 
-export function Evaluate({ refreshKey }: { refreshKey: number }) {
+export function Evaluate({
+  refreshKey,
+  engine,
+}: {
+  refreshKey: number;
+  engine: EngineState;
+}) {
   const [booklets, setBooklets] = useState<Booklet[]>([]);
   const [chosen, setChosen] = useState<string | null>(null);
   const [segmentation, setSegmentation] = useState<BookletSegmentation | null>(null);
@@ -97,13 +105,13 @@ export function Evaluate({ refreshKey }: { refreshKey: number }) {
     setElapsed(0);
     setError(null);
     try {
-      setResult(await api.evaluateBooklet(chosen));
+      setResult(await api.evaluateBooklet(chosen, { engine: engine.engine }));
       setPhase("done");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Marking failed.");
       setPhase("error");
     }
-  }, [chosen]);
+  }, [chosen, engine.engine]);
 
   const reset = useCallback(() => {
     setChosen(null);
@@ -140,6 +148,8 @@ export function Evaluate({ refreshKey }: { refreshKey: number }) {
           {error}
         </p>
       )}
+
+      <EngineToggle state={engine} />
 
       {phase === "choosing" && (
         <BookletPicker booklets={booklets} onChoose={preview} />

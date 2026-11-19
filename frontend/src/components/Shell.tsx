@@ -1,4 +1,7 @@
 import type { ReactNode } from "react";
+import { Logo } from "./Logo";
+import { EngineBadge } from "./EngineToggle";
+import type { EngineState } from "../lib/engine";
 import type { ProviderInfo } from "../lib/types";
 
 export type View = "transcribe" | "library" | "rubrics" | "evaluation" | "review" | "validation";
@@ -25,20 +28,25 @@ export function Shell({
   view,
   onNavigate,
   provider,
+  engine,
   children,
 }: {
   view: View;
   onNavigate: (view: View) => void;
   provider: ProviderInfo | null;
+  engine: EngineState;
   children: ReactNode;
 }) {
   return (
     <div className="min-h-screen">
       <header className="border-b border-line bg-surface">
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-6 gap-y-3 px-6 py-3">
-          <div className="flex items-baseline gap-2.5">
-            <span className="font-display text-lg font-bold tracking-tight">EvalNova</span>
-            <span className="font-display text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-accent">
+          <div className="flex items-center gap-2.5">
+            <Logo size={28} className="text-ink" />
+            <span className="font-display text-lg font-extrabold tracking-tightest">
+              EvalNova
+            </span>
+            <span className="font-display text-[0.68rem] font-bold uppercase tracking-label text-energyInk">
               Core
             </span>
           </div>
@@ -53,7 +61,7 @@ export function Shell({
                   aria-current={active ? "page" : undefined}
                   className={`rounded-md px-3 py-1.5 font-display text-sm transition-colors ${
                     active
-                      ? "bg-accentSoft text-accent font-semibold"
+                      ? "bg-accentSoft font-bold text-accent"
                       : "text-ink2 hover:bg-surface2"
                   }`}
                 >
@@ -68,7 +76,10 @@ export function Shell({
             })}
           </nav>
 
-          {provider && <EngineBadge provider={provider} />}
+          <div className="ml-auto flex items-center gap-2">
+            <EngineBadge state={engine} />
+            {provider && <ModelBadge provider={provider} />}
+          </div>
         </div>
       </header>
 
@@ -77,25 +88,26 @@ export function Shell({
   );
 }
 
-function EngineBadge({ provider }: { provider: ProviderInfo }) {
+/** Whether the selected engine's model is loaded and ready to read a page. */
+function ModelBadge({ provider }: { provider: ProviderInfo }) {
   const tone = provider.is_mock
     ? "border-band3 text-band3"
     : provider.is_ready
       ? "border-band1 text-band1"
       : "border-line text-ink3";
   const label = provider.is_mock
-    ? "Mock engine"
+    ? "Stand-in engine"
     : provider.is_ready
       ? "Model ready"
       : "Model loading";
 
   return (
     <div
-      className={`ml-auto flex items-center gap-2 rounded-full border px-3 py-1 ${tone}`}
+      className={`flex items-center gap-2 rounded-full border px-3 py-1 ${tone}`}
       title={`${provider.model_name} on ${provider.device} — ${provider.detail}`}
     >
       <span className="h-1.5 w-1.5 rounded-full bg-current" />
-      <span className="font-display text-[0.7rem] font-semibold uppercase tracking-wider">
+      <span className="font-display text-[0.68rem] font-bold uppercase tracking-wider">
         {label}
       </span>
       <span className="font-mono text-[0.68rem] text-ink3">{provider.device}</span>

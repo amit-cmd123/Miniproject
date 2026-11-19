@@ -1,60 +1,109 @@
-@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;600&display=swap");
+/* ═══════════════════════════════════════════════════════════════════════
+   EvalNova Core — theme
+
+   The palette, type and motion here come from the EvalNova brand kit
+   (Desktop/EvalNova/EvalNova-Brand-Kit), whose core colours were sampled
+   from the logo artwork: navy for structure, nova blue for action, scan
+   cyan for live state.
+
+   The variable *names* are deliberately unchanged from the previous theme.
+   Every view refers to `--ink`, `--surface`, `--accent` and the band ramp
+   rather than to a colour, so restyling the whole application is this file
+   plus the Tailwind colour map, and no component had to be touched. That is
+   the property worth keeping: the next palette change should also be one
+   file.
+
+   Contrast ratios are the ones the brand kit computed to WCAG 2.1 AA. The
+   -ink variants of the status colours exist because the vivid versions fail
+   as text on light grounds (cyan on white is 2.42:1), so light mode uses the
+   darker variant and dark mode the vivid one.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --ground: #f7f8f7;
+  /* -- light (default) ------------------------------------------------- */
+  --ground: #f5f8fd;
   --surface: #ffffff;
-  --surface-2: #f1f4f2;
-  --ink: #14201c;
-  --ink-2: #4c5a55;
-  --ink-3: #77857f;
-  --line: #dee4e1;
-  --line-strong: #c4cec9;
-  --accent: #0f6b5c;
-  --accent-soft: #e2efea;
-  --band-1: #0f6b5c;
-  --band-2: #6e8a2c;
-  --band-3: #b5761b;
-  --band-4: #a33b22;
+  --surface-2: #eaf1fb;
+  --ink: #00164f; /* 17.1:1 on white */
+  --ink-2: #40567f;
+  --ink-3: #586e92; /* 4.86:1 — the lightest text allowed on light */
+  --line: #dce6f4;
+  --line-strong: #bccde6;
+  --accent: #0b57d6; /* 5.89:1 on the ground */
+  --accent-soft: #e0ecfd;
+  --energy: #00b2f3; /* graphic only on light */
+  --energy-ink: #006e97; /* 5.36:1 — cyan as text on light */
+  --on-accent: #ffffff;
+
+  /* Confidence and outcome bands, best to worst. */
+  --band-1: #0e7c5a;
+  --band-2: #006e97;
+  --band-3: #9a6100;
+  --band-4: #c4213a;
+
+  --shadow-sm: 0 1px 3px rgba(0, 22, 79, 0.07);
+  --shadow-md: 0 8px 24px rgba(0, 22, 79, 0.09);
+  --shadow-accent: 0 8px 28px rgba(11, 87, 214, 0.26);
 }
 
+/* The dark values live in one block, applied by either the system
+   preference or an explicit data-theme, so the two can never drift. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground: #0d1412;
-    --surface: #141d1a;
-    --surface-2: #1a2521;
-    --ink: #e7edea;
-    --ink-2: #a3b1ab;
-    --ink-3: #7a8a84;
-    --line: #26312d;
-    --line-strong: #33403a;
-    --accent: #4fb89f;
-    --accent-soft: #16302a;
-    --band-1: #4fb89f;
-    --band-2: #9dbb4e;
-    --band-3: #d9993f;
-    --band-4: #d96a4c;
+    --ground: #00081e;
+    --surface: #000e31;
+    --surface-2: #001241;
+    --ink: #e8f1fe; /* 17.5:1 on the ground */
+    --ink-2: #9db6d9;
+    --ink-3: #7a90b5; /* 6.15:1 */
+    --line: rgba(185, 220, 254, 0.13);
+    --line-strong: rgba(185, 220, 254, 0.26);
+    --accent: #5698fd; /* 6.93:1 — nova-500 fails here at 4.35:1 */
+    --accent-soft: rgba(14, 108, 253, 0.18);
+    --energy: #00b2f3; /* 8.21:1 on navy — usable as text */
+    --energy-ink: #00b2f3;
+    --on-accent: #00081e;
+
+    --band-1: #10b981;
+    --band-2: #00b2f3;
+    --band-3: #f5a524;
+    --band-4: #fb4a62;
+
+    --shadow-sm: 0 1px 3px rgba(0, 8, 30, 0.28);
+    --shadow-md: 0 8px 24px rgba(0, 8, 30, 0.34);
+    --shadow-accent: 0 8px 28px rgba(14, 108, 253, 0.34);
   }
 }
 
 :root[data-theme="dark"] {
-  --ground: #0d1412;
-  --surface: #141d1a;
-  --surface-2: #1a2521;
-  --ink: #e7edea;
-  --ink-2: #a3b1ab;
-  --ink-3: #7a8a84;
-  --line: #26312d;
-  --line-strong: #33403a;
-  --accent: #4fb89f;
-  --accent-soft: #16302a;
-  --band-1: #4fb89f;
-  --band-2: #9dbb4e;
-  --band-3: #d9993f;
-  --band-4: #d96a4c;
+  --ground: #00081e;
+  --surface: #000e31;
+  --surface-2: #001241;
+  --ink: #e8f1fe;
+  --ink-2: #9db6d9;
+  --ink-3: #7a90b5;
+  --line: rgba(185, 220, 254, 0.13);
+  --line-strong: rgba(185, 220, 254, 0.26);
+  --accent: #5698fd;
+  --accent-soft: rgba(14, 108, 253, 0.18);
+  --energy: #00b2f3;
+  --energy-ink: #00b2f3;
+  --on-accent: #00081e;
+
+  --band-1: #10b981;
+  --band-2: #00b2f3;
+  --band-3: #f5a524;
+  --band-4: #fb4a62;
+
+  --shadow-sm: 0 1px 3px rgba(0, 8, 30, 0.28);
+  --shadow-md: 0 8px 24px rgba(0, 8, 30, 0.34);
+  --shadow-accent: 0 8px 28px rgba(14, 108, 253, 0.34);
 }
 
 @layer base {
@@ -65,23 +114,28 @@
     margin: 0;
     background: var(--ground);
     color: var(--ink);
-    font-family: "Source Serif 4", Georgia, serif;
+    /* One family throughout, as the brand kit specifies: character comes
+       from weight and tracking rather than from a second display face. */
+    font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+    font-size: 0.95rem;
+    line-height: 1.7;
     -webkit-font-smoothing: antialiased;
   }
   h1,
   h2,
   h3,
-  h4,
-  button,
-  label,
+  h4 {
+    letter-spacing: -0.035em;
+  }
+  /* Numbers that sit in columns - marks, confidences, page counts - must not
+     reflow as they change, which proportional digits do. */
   th,
-  input,
-  select,
-  textarea {
-    font-family: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  td,
+  input[type="number"] {
+    font-variant-numeric: tabular-nums;
   }
   *:focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 2px solid var(--energy);
     outline-offset: 2px;
     border-radius: 3px;
   }
@@ -89,17 +143,17 @@
 
 @layer components {
   .eyebrow {
-    @apply font-display text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-ink3;
+    @apply text-[0.7rem] font-bold uppercase tracking-[0.18em] text-ink3;
   }
   .card {
-    @apply rounded-md border border-line bg-surface;
+    @apply rounded-lg border border-line bg-surface;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold
            transition-colors disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-accent text-white hover:opacity-90;
+    @apply btn bg-accent text-onAccent hover:opacity-90;
   }
   .btn-ghost {
     @apply btn border border-line bg-surface text-ink hover:bg-surface2;
@@ -110,10 +164,67 @@
   .input {
     @apply rounded-md border border-line bg-surface px-3 py-2 text-sm text-ink
            placeholder:text-ink3 focus-visible:outline focus-visible:outline-2
-           focus-visible:outline-accent;
+           focus-visible:outline-energy;
   }
   textarea.input {
     @apply resize-y leading-relaxed;
+  }
+  /* The one gradient per screen the brand kit allows, on the most important
+     element. */
+  .nova-gradient {
+    background-image: linear-gradient(105deg, #00b2f3, #0e6cfd 62%);
+  }
+}
+
+/* ── The scan beam ─────────────────────────────────────────────────────
+   The brand's signature motion, and the brand kit is explicit about where
+   it belongs: upload zones and processing cards, *only while work is
+   running*. A beam that sweeps when nothing is happening is decoration
+   pretending to be a progress indicator. So it is applied by a class the
+   components add while a request is in flight and remove when it lands. */
+
+@keyframes ev-beam {
+  0% {
+    top: -4%;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  92% {
+    opacity: 1;
+  }
+  100% {
+    top: 104%;
+    opacity: 0;
+  }
+}
+
+.scanning {
+  position: relative;
+  overflow: hidden;
+}
+.scanning::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #00b2f3, transparent);
+  box-shadow: 0 0 12px rgba(0, 178, 243, 0.65);
+  animation: ev-beam 3.4s cubic-bezier(0.55, 0, 0.45, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes ev-glow {
+  0%,
+  100% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
   }
 }
 
@@ -124,15 +235,9 @@
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
-}
-
-/* The accent is dark in light mode and light in dark mode, so button text has
-   to flip with it or it disappears into the fill. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .btn-primary {
-    color: #0d1412;
+  /* The beam is a moving line with no other purpose; with reduced motion it
+     should not be a stationary line across the card either. */
+  .scanning::after {
+    display: none;
   }
-}
-:root[data-theme="dark"] .btn-primary {
-  color: #0d1412;
 }

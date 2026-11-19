@@ -445,3 +445,51 @@ export interface Analytics {
   mean_review_seconds: number | null;
   note: string;
 }
+
+
+/* ---- engines ----
+ *
+ * Which engine read the page and which one marked it is a per-request
+ * choice, not a deployment setting: the interface offers a switch so the
+ * cloud model and the model we trained can be compared on the same booklet
+ * in the same sitting.
+ */
+
+export type Engine = "gemini" | "local";
+
+export interface EngineOption {
+  id: Engine;
+  label: string;
+  available: boolean;
+  /** Why it cannot be used, when it cannot. Shown beside a disabled switch. */
+  unavailable_reason: string | null;
+  transcription: string;
+  marking: string;
+  detail: string;
+}
+
+export interface Engines {
+  engines: EngineOption[];
+  default_engine: string;
+}
+
+/* ---- importing a paper from a document ---- */
+
+export interface ParsedSource {
+  filename: string;
+  kind: string;
+  page_count: number;
+  table_count: number;
+  characters: number;
+}
+
+export interface ParsedPaper {
+  /** Seed JSON, ready to post to `importExam` once the examiner approves it. */
+  seed: Record<string, unknown>;
+  strategy: "local" | "gemini";
+  warnings: string[];
+  unplaced_lines: string[];
+  source: ParsedSource;
+  question_count: number;
+  total_marks: number;
+}
