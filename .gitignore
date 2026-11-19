@@ -47,3 +47,21 @@ data/*.zip
 # A zip written without an extension by an interrupted command leaves 38 MB of
 # dataset in data/ that the pattern above does not catch.
 data/zia*
+
+# The generated project report and its figures.
+#
+# The report is rebuilt from the repository with:
+#     .venv\Scripts\python scripts\report\figures.py
+#     .venv\Scripts\python scripts\report\build_report.py
+#     powershell -ExecutionPolicy Bypass -File scripts\report\finalise.ps1
+#
+# The figures are excluded for the same reason data/exam/pages is: one of them
+# (fig_4_7_segmentation.png) shows a real answer page, and the volunteers who
+# wrote those pages are identifiable from their handwriting. The .docx and .pdf
+# embed that figure, so they are excluded too. The measurements the report
+# quotes are kept, because they are numbers rather than images and the report's
+# claims should be checkable.
+docs/report/figures/
+docs/report/assets/
+docs/report/*.docx
+docs/report/*.pdf
