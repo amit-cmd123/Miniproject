@@ -12,7 +12,7 @@ from app.core.thresholds import classify_evaluation
 from app.db.models import Answer, Evaluation, Question
 from app.db.session import get_db
 from app.providers.evaluation.base import EvaluationProvider
-from app.providers.evaluation.registry import get_evaluation_provider
+from app.api.deps import marking_engine
 from app.schemas.enums import ReviewBand
 from app.schemas.evaluation import (
     AnalyticsOut,
@@ -167,7 +167,7 @@ def _resolve_exam(db: Session, exam_id: str | None):
 
 @router.get("/evaluations/provider", response_model=EvaluatorInfoOut)
 def evaluator_info(
-    provider: EvaluationProvider = Depends(get_evaluation_provider),
+    provider: EvaluationProvider = Depends(marking_engine),
 ) -> EvaluatorInfoOut:
     """Which marker is configured, and is it usable?"""
     return EvaluatorInfoOut(**provider.info().__dict__)
@@ -211,7 +211,7 @@ def confidence_weights() -> dict:
 def create_evaluation(
     payload: EvaluateIn,
     db: Session = Depends(get_db),
-    provider: EvaluationProvider = Depends(get_evaluation_provider),
+    provider: EvaluationProvider = Depends(marking_engine),
 ) -> EvaluationOut:
     """Mark one transcribed answer against its question's rubric."""
     answer = db.get(Answer, payload.answer_id)
@@ -351,7 +351,7 @@ def preview_segmentation(
 def evaluate_booklet(
     payload: EvaluateBookletIn,
     db: Session = Depends(get_db),
-    provider: EvaluationProvider = Depends(get_evaluation_provider),
+    provider: EvaluationProvider = Depends(marking_engine),
 ) -> BookletResultOut:
     """Mark a whole transcribed booklet, question by question.
 

@@ -16,7 +16,7 @@ from app.core.thresholds import classify_transcription, describe_bands
 from app.db.models import Answer, OCRResult
 from app.db.session import get_db
 from app.providers.ocr.base import OCRProvider
-from app.providers.ocr.registry import get_ocr_provider
+from app.api.deps import gemini_is_configured, ocr_engine
 from app.schemas.ocr import (
     AccuracyIn,
     AccuracyOut,
@@ -25,6 +25,8 @@ from app.schemas.ocr import (
     AnswerWithOCROut,
     CorrectionIn,
     DocumentTranscriptionOut,
+    EngineOut,
+    EnginesOut,
     OCRResultOut,
     PageResultOut,
     PdfInspectionOut,
@@ -128,10 +130,71 @@ def _get_latest_ocr(db: Session, answer: Answer) -> OCRResult:
 
 
 @router.get("/ocr/provider", response_model=ProviderInfoOut)
-def provider_info(provider: OCRProvider = Depends(get_ocr_provider)) -> ProviderInfoOut:
+def provider_info(provider: OCRProvider = Depends(ocr_engine)) -> ProviderInfoOut:
     """Which recognition engine is loaded, and is it ready?"""
     info = provider.info()
     return ProviderInfoOut(**info.__dict__)
+
+
+@router.get("/engines", response_model=EnginesOut)
+def engines() -> EnginesOut:
+    """The engines this installation can run, and whether each one can run now.
+
+    The interface needs this before it draws the Gemini switch: a toggle that
+    can be flipped into a 503 is worse than one that is visibly unavailable
+    and says why.
+    """
+    from app.providers.ocr.registry import get_ocr_provider_for
+
+    has_key = gemini_is_configured()
+
+    local_detail = "Loads on first use; the first page is slower while weights load."
+    try:
+        info = get_ocr_provider_for("local").info()
+        local_detail = info.detail
+        local_label = info.model_version
+    except Exception as exc:  # pragma: no cover - environment dependent
+        local_label = "unavailable"
+        local_detail = str(exc)
+
+    return EnginesOut(
+        default_engine="gemini" if settings.ocr_provider == "gemini" and has_key else "local",
+        engines=[
+            EngineOut(
+                id="gemini",
+                label="Gemini (cloud)",
+                available=has_key,
+                unavailable_reason=(
+                    None
+                    if has_key
+                    else "No API key. Set EVALNOVA_GEMINI_API_KEY in the .env file."
+                ),
+                transcription=settings.gemini_model,
+                marking=settings.evaluation_model or settings.gemini_model,
+                detail=(
+                    "Reads the page and marks against the rubric with Google's "
+                    "model. Measured at 2.9% character error rate on our own "
+                    "booklets. Page images and transcribed text leave this machine."
+                ),
+            ),
+            EngineOut(
+                id="local",
+                label="EvalNova local engine",
+                available=True,
+                unavailable_reason=None,
+                transcription=f"TrOCR · {local_label}",
+                marking="Rubric concept matcher",
+                detail=(
+                    "Our own pipeline, start to finish, with nothing leaving this "
+                    "machine: OpenCV deskew and line segmentation, the TrOCR "
+                    "handwriting model for reading, and criterion-by-criterion "
+                    "concept matching for the marks. Slower and less accurate "
+                    "than the cloud model, and every result it produces is "
+                    "labelled with that. " + local_detail
+                ),
+            ),
+        ],
+    )
 
 
 @router.get("/config/thresholds", response_model=ThresholdsOut)
@@ -176,7 +239,7 @@ async def upload_answer(
 def transcribe(
     answer_id: str,
     db: Session = Depends(get_db),
-    provider: OCRProvider = Depends(get_ocr_provider),
+    provider: OCRProvider = Depends(ocr_engine),
 ) -> OCRResultOut:
     """Read the handwriting on a registered answer."""
     answer = _get_answer(db, answer_id)
@@ -197,7 +260,7 @@ async def upload_and_transcribe(
     question_id: str | None = Form(default=None),
     booklet_ref: str | None = Form(default=None),
     db: Session = Depends(get_db),
-    provider: OCRProvider = Depends(get_ocr_provider),
+    provider: OCRProvider = Depends(ocr_engine),
 ) -> AnswerWithOCROut:
     """Upload and read in one call - what the interface uses."""
     data = await file.read()
@@ -229,7 +292,7 @@ async def upload_and_transcribe(
 @router.post("/documents/inspect", response_model=PdfInspectionOut)
 async def inspect_pdf(
     file: UploadFile = File(...),
-    provider: OCRProvider = Depends(get_ocr_provider),
+    provider: OCRProvider = Depends(ocr_engine),
 ) -> PdfInspectionOut:
     """How many pages, and roughly how long will reading them take?
 
@@ -273,7 +336,7 @@ async def transcribe_document(
     pages: str | None = Form(default=None, description="e.g. 1-3 or 2,5. Blank = all."),
     booklet_ref: str | None = Form(default=None),
     db: Session = Depends(get_db),
-    provider: OCRProvider = Depends(get_ocr_provider),
+    provider: OCRProvider = Depends(ocr_engine),
 ) -> DocumentTranscriptionOut:
     """Read a scanned PDF answer booklet.
 

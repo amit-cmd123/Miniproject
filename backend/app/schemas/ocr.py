@@ -198,3 +198,23 @@ class ProviderInfoOut(BaseModel):
     is_ready: bool
     is_mock: bool
     detail: str
+
+
+class EngineOut(BaseModel):
+    """One selectable engine, as the switch in the interface sees it."""
+
+    id: str  # "gemini" | "local"
+    label: str
+    available: bool
+    # Why it cannot be used, when it cannot. Shown next to a disabled switch so
+    # the reason is visible before someone tries and gets a 503.
+    unavailable_reason: str | None = None
+    transcription: str  # what reads the handwriting
+    marking: str  # what awards the marks
+    detail: str
+
+
+class EnginesOut(BaseModel):
+    engines: list[EngineOut]
+    # Which one a request gets when it does not say. Mirrors the .env file.
+    default_engine: str
