@@ -24,9 +24,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { RubricEditor } from "../components/RubricEditor";
 import { api, ApiError } from "../lib/api";
-import type { Exam, ExamDetail, Question, RubricValidation } from "../lib/types";
+import type { EngineState } from "../lib/engine";
+import type {
+  Exam,
+  ExamDetail,
+  ParsedPaper,
+  Question,
+  RubricValidation,
+} from "../lib/types";
 
-export function Rubrics() {
+export function Rubrics({ engine }: { engine: EngineState }) {
   const [papers, setPapers] = useState<Exam[]>([]);
   const [chosen, setChosen] = useState<string | null>(null);
   const [exam, setExam] = useState<ExamDetail | null>(null);
@@ -37,6 +44,10 @@ export function Rubrics() {
   const [open, setOpen] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [newPaper, setNewPaper] = useState(false);
+  // A paper read out of a Word or PDF file, waiting to be approved. It is
+  // held here and not written anywhere until the examiner says so.
+  const [proposed, setProposed] = useState<ParsedPaper | null>(null);
+  const [reading, setReading] = useState(false);
 
   /**
    * `wanted` names the paper to show. Importing creates additional papers and
@@ -130,6 +141,44 @@ export function Rubrics() {
       );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Export failed.");
+    }
+  }
+
+  /** Read a typed paper. Nothing is saved; the result is a proposal. */
+  async function readDocument(file: File) {
+    setError(null);
+    setNotice(null);
+    setProposed(null);
+    setReading(true);
+    try {
+      setProposed(await api.parseDocument(file, engine.engine));
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "That document could not be read.",
+      );
+    } finally {
+      setReading(false);
+    }
+  }
+
+  /** Commit an approved proposal through the ordinary import route. */
+  async function acceptProposal(seed: Record<string, unknown>) {
+    setError(null);
+    try {
+      const created = await api.importExam(seed);
+      setProposed(null);
+      setNotice(
+        `Imported "${created.title}" with ${created.question_count} question(s), ` +
+          `worth ${created.total_marks} marks. Check each rubric below before ` +
+          `marking against it.`,
+      );
+      await load(null, created.id);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "That paper could not be saved.",
+      );
     }
   }
 
@@ -227,6 +276,23 @@ export function Rubrics() {
               <button type="button" className="btn-ghost text-sm" onClick={exportPaper}>
                 Export JSON
               </button>
+              <label
+                className={`btn-ghost cursor-pointer text-sm ${
+                  reading ? "pointer-events-none opacity-60" : ""
+                }`}
+              >
+                {reading ? "Reading\u2026" : "Import Word / PDF"}
+                <input
+                  type="file"
+                  accept=".docx,.pdf,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void readDocument(file);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
               <label className="btn-ghost cursor-pointer text-sm">
                 Import JSON
                 <input
@@ -251,6 +317,14 @@ export function Rubrics() {
               )}
             </div>
           </section>
+
+          {proposed && (
+            <ImportPreview
+              parsed={proposed}
+              onAccept={acceptProposal}
+              onCancel={() => setProposed(null)}
+            />
+          )}
 
           {newPaper && (
             <NewPaper
@@ -1054,5 +1128,208 @@ function Tag({ children }: { children: React.ReactNode }) {
     <span className="rounded border border-line px-1.5 py-0.5 font-display text-[0.6rem] font-semibold uppercase tracking-wider text-ink3">
       {children}
     </span>
+  );
+}
+
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * What a document turned out to contain, shown before anything is saved.
+ *
+ * The whole point of this panel is that it is refusable. A marking scheme
+ * decides a student's grade; a parser - or a language model - reading one out
+ * of a Word file is a proposal about what the document said, and the examiner
+ * is the one who knows whether it got it right. So the criteria are laid out
+ * with their marks and their sums, the parser's own doubts are printed, and
+ * the lines it could not place are listed, because a criterion silently
+ * dropped is invisible in a rubric that otherwise looks complete.
+ */
+function ImportPreview({
+  parsed,
+  onAccept,
+  onCancel,
+}: {
+  parsed: ParsedPaper;
+  onAccept: (seed: Record<string, unknown>) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const seed = parsed.seed as {
+    exam?: { title?: string; subject?: string; code?: string };
+    questions?: {
+      number?: string;
+      text: string;
+      max_marks: number;
+      answer_key?: string;
+      criteria?: { position: number; description: string; max_marks: number }[];
+    }[];
+  };
+
+  const [title, setTitle] = useState(seed.exam?.title ?? "Imported paper");
+  const [subject, setSubject] = useState(seed.exam?.subject ?? "Unspecified");
+  const [saving, setSaving] = useState(false);
+
+  const questions = seed.questions ?? [];
+  const mismatched = questions.filter((q) => {
+    const criteria = q.criteria ?? [];
+    if (!criteria.length) return false;
+    const total = criteria.reduce((sum, c) => sum + c.max_marks, 0);
+    return Math.abs(total - q.max_marks) > 0.001;
+  });
+
+  async function accept() {
+    setSaving(true);
+    try {
+      await onAccept({
+        ...parsed.seed,
+        exam: { ...(seed.exam ?? {}), title, subject },
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-line p-5">
+        <div>
+          <p className="eyebrow">Read from a document — not saved yet</p>
+          <h2 className="mt-1 font-display text-lg font-bold tracking-tight">
+            {parsed.question_count} question(s), {parsed.total_marks} marks
+          </h2>
+          <p className="mt-1 text-sm text-ink2">
+            <span className="font-mono text-xs">{parsed.source.filename}</span> ·{" "}
+            {parsed.source.kind.toUpperCase()}
+            {parsed.source.page_count > 1 && ` · ${parsed.source.page_count} pages`}
+            {parsed.source.table_count > 0 &&
+              ` · ${parsed.source.table_count} table(s)`}{" "}
+            · read by{" "}
+            {parsed.strategy === "gemini" ? "Gemini" : "the built-in parser"}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-ghost text-sm" onClick={onCancel} disabled={saving}>
+            Discard
+          </button>
+          <button className="btn-primary text-sm" onClick={() => void accept()} disabled={saving}>
+            {saving ? "Saving\u2026" : "Create this paper"}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 border-b border-line p-5 sm:grid-cols-2">
+        <label className="flex flex-col gap-1">
+          <span className="eyebrow">Paper title</span>
+          <input
+            className="input"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="eyebrow">Subject</span>
+          <input
+            className="input"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+          />
+        </label>
+      </div>
+
+      {(parsed.warnings.length > 0 || mismatched.length > 0) && (
+        <div className="border-b border-line bg-surface2 p-5">
+          <p className="eyebrow text-band3">Check these before saving</p>
+          <ul className="mt-2 flex flex-col gap-1.5 text-sm text-ink2">
+            {mismatched.length > 0 && (
+              <li>
+                <span className="font-semibold text-band3">
+                  {mismatched.length} question(s) have criteria that do not sum to
+                  the question's marks.
+                </span>{" "}
+                They are imported exactly as the document had them — rebalancing a
+                marking scheme is your call, not the importer's. Fix each one in the
+                rubric editor below, or that question cannot be marked.
+              </li>
+            )}
+            {parsed.warnings.map((warning, index) => (
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <ol className="divide-y divide-line">
+        {questions.map((question, index) => {
+          const criteria = question.criteria ?? [];
+          const total = criteria.reduce((sum, c) => sum + c.max_marks, 0);
+          const sums = !criteria.length || Math.abs(total - question.max_marks) <= 0.001;
+          return (
+            <li key={index} className="p-5">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="font-mono text-xs font-semibold text-accent">
+                  {question.number ?? `Q${index + 1}`}
+                </span>
+                <span className="font-display text-sm font-semibold">
+                  {question.max_marks} marks
+                </span>
+                {criteria.length > 0 && (
+                  <span
+                    className={`font-mono text-xs ${sums ? "text-band1" : "text-band4"}`}
+                  >
+                    criteria sum to {total}
+                    {sums ? "" : " — does not match"}
+                  </span>
+                )}
+                {!criteria.length && (
+                  <span className="font-mono text-xs text-band3">
+                    no rubric found — add one below
+                  </span>
+                )}
+              </div>
+              <p className="mt-1.5 text-sm text-ink">{question.text}</p>
+              {criteria.length > 0 && (
+                <ul className="mt-2 flex flex-col gap-1">
+                  {criteria.map((criterion) => (
+                    <li
+                      key={criterion.position}
+                      className="flex gap-3 text-sm text-ink2"
+                    >
+                      <span className="w-10 shrink-0 text-right font-mono text-xs text-ink3">
+                        {criterion.max_marks}
+                      </span>
+                      <span>{criterion.description}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {question.answer_key && (
+                <p className="mt-2 border-l-2 border-line pl-3 text-xs text-ink3">
+                  <span className="font-semibold">Answer key: </span>
+                  {question.answer_key}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+
+      {parsed.unplaced_lines.length > 0 && (
+        <details className="border-t border-line p-5">
+          <summary className="cursor-pointer font-display text-sm font-semibold">
+            {parsed.unplaced_lines.length} line(s) the parser could not place
+          </summary>
+          <p className="mt-2 text-xs text-ink3">
+            Headers and page furniture usually land here, which is harmless. A
+            criterion in this list is not harmless — it means the rubric above is
+            missing it.
+          </p>
+          <ul className="mt-2 flex flex-col gap-0.5 font-mono text-xs text-ink2">
+            {parsed.unplaced_lines.map((line, index) => (
+              <li key={index}>{line}</li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
   );
 }

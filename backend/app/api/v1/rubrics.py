@@ -5,7 +5,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.core.config import REPO_ROOT
@@ -20,13 +28,17 @@ from app.schemas.rubrics import (
     ExamOut,
     QuestionIn,
     QuestionOut,
+    ParsedPaperOut,
+    ParsedSourceOut,
     QuestionPatch,
     RubricIn,
     RubricOut,
     RubricValidationOut,
     RubricVersionOut,
 )
-from app.services import rubric_service
+from app.services import document_text, rubric_import, rubric_service
+from app.services.document_text import DocumentTextError
+from app.services.rubric_import import RubricImportError
 from app.services.rubric_service import RubricError
 
 logger = logging.getLogger(__name__)
@@ -35,6 +47,11 @@ router = APIRouter(tags=["questions & rubrics"])
 # The exam shipped with the project: a 30-mark C programming paper with a
 # rubric per question. Seeding it is how a demo gets something to mark.
 SEED_PATH = REPO_ROOT / "data" / "exam" / "seed_exam.json"
+
+# A typed marking scheme is a text document. The large allowance that
+# scanned answer booklets get does not apply, and a 100 MB upload here is
+# a mistake worth catching early.
+MAX_DOCUMENT_BYTES = 15 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -455,3 +472,70 @@ def delete_exam(exam_id: str, db: Session = Depends(get_db)) -> None:
         rubric_service.delete_exam(db, exam)
     except RubricError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+
+
+@router.post("/exams/parse-document", response_model=ParsedPaperOut)
+async def parse_document(
+    file: UploadFile = File(...),
+    engine: str | None = Query(
+        None,
+        description=(
+            "'gemini' reads the document with the cloud model; 'local' uses "
+            "the built-in parser. Defaults to the local parser."
+        ),
+    ),
+) -> ParsedPaperOut:
+    """Read a typed question paper and propose a rubric from it.
+
+    Nothing is saved. The reply is a proposal for the examiner to check and
+    edit, which they then commit through `POST /exams/import`. A marking
+    scheme decides a student's grade, so it does not enter the database on a
+    parser's say-so.
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "That file is empty.")
+    if len(data) > MAX_DOCUMENT_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"That document is larger than the {MAX_DOCUMENT_BYTES // (1024 * 1024)} MB "
+            f"limit for marking schemes.",
+        )
+
+    try:
+        extracted = document_text.extract(data, file.filename or "", file.content_type)
+    except DocumentTextError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    try:
+        parsed = rubric_import.parse(extracted.text, engine=engine)
+    except RubricImportError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    # Validate the proposal through the same door a hand-written paper uses,
+    # so a preview that cannot be imported is caught here rather than after
+    # the examiner has spent ten minutes editing it.
+    try:
+        rubric_service.exam_from_seed(parsed.seed)
+    except RubricError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"The document was read, but the paper built from it is not usable: {exc}",
+        ) from exc
+
+    questions = parsed.seed.get("questions") or []
+    return ParsedPaperOut(
+        seed=parsed.seed,
+        strategy=parsed.strategy,
+        warnings=[*extracted.warnings, *parsed.warnings],
+        unplaced_lines=parsed.unplaced_lines,
+        source=ParsedSourceOut(
+            filename=file.filename or "document",
+            kind=extracted.kind,
+            page_count=extracted.page_count,
+            table_count=extracted.table_count,
+            characters=len(extracted.text),
+        ),
+        question_count=len(questions),
+        total_marks=round(sum(float(q["max_marks"]) for q in questions), 2),
+    )

@@ -183,3 +183,32 @@ class RubricValidationOut(BaseModel):
     criteria_checked: int
     total_marks: float
     problems: list[RubricProblem] = Field(default_factory=list)
+
+
+class ParsedSourceOut(BaseModel):
+    """Where an imported paper came from, so the preview can be judged."""
+
+    filename: str
+    kind: str  # docx | pdf | text
+    page_count: int
+    table_count: int
+    characters: int
+
+
+class ParsedPaperOut(BaseModel):
+    """A paper read out of a document, before anyone has agreed to keep it.
+
+    Deliberately not an `ExamDetailOut`: nothing has been written yet. The
+    examiner reviews this, edits it, and only then posts it to
+    `POST /exams/import`, which is the one place a paper is created.
+    """
+
+    seed: dict
+    strategy: str  # "local" | "gemini"
+    warnings: list[str] = []
+    # Lines the parser could not account for. A criterion quietly dropped is
+    # invisible in the result but obvious here.
+    unplaced_lines: list[str] = []
+    source: ParsedSourceOut
+    question_count: int
+    total_marks: float
